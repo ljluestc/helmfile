@@ -38,6 +38,7 @@ type App struct {
 	EnforcePluginVerification       bool
 	HelmOCIPlainHTTP                bool
 	DisableKubeVersionAutoDetection bool
+	SequentialHelmfiles             bool
 
 	Logger      *zap.SugaredLogger
 	Kubeconfig  string
@@ -86,6 +87,7 @@ func New(conf ConfigProvider) *App {
 		DisableForceUpdate:         conf.DisableForceUpdate(),
 		EnforcePluginVerification:  conf.EnforcePluginVerification(),
 		HelmOCIPlainHTTP:           conf.HelmOCIPlainHTTP(),
+		SequentialHelmfiles:        conf.SequentialHelmfiles(),
 		Logger:                     conf.Logger(),
 		Kubeconfig:                 conf.Kubeconfig(),
 		Env:                        conf.Env(),
@@ -168,8 +170,9 @@ func (a *App) Diff(c DiffConfigProvider) error {
 			Validate:               c.Validate(),
 			Concurrency:            c.Concurrency(),
 			IncludeTransitiveNeeds: c.IncludeNeeds(),
-		}, func() {
+		}, func() []error {
 			msg, matched, affected, errs = a.diff(run, c)
+			return errs
 		})
 
 		if msg != nil {
@@ -243,8 +246,9 @@ func (a *App) Template(c TemplateConfigProvider) error {
 			Values:                 c.Values(),
 			KubeVersion:            c.KubeVersion(),
 			HelmOCIPlainHTTP:       a.HelmOCIPlainHTTP,
-		}, func() {
+		}, func() []error {
 			ok, errs = a.template(run, c)
+			return errs
 		})
 
 		if prepErr != nil {
@@ -263,8 +267,9 @@ func (a *App) WriteValues(c WriteValuesConfigProvider) error {
 			SkipDeps:    c.SkipDeps(),
 			SkipCleanup: c.SkipCleanup(),
 			Concurrency: c.Concurrency(),
-		}, func() {
+		}, func() []error {
 			ok, errs = a.writeValues(run, c)
+			return errs
 		})
 
 		if prepErr != nil {
@@ -316,8 +321,9 @@ func (a *App) Lint(c LintConfigProvider) error {
 			SkipCleanup:            c.SkipCleanup(),
 			Concurrency:            c.Concurrency(),
 			IncludeTransitiveNeeds: c.IncludeNeeds(),
-		}, func() {
+		}, func() []error {
 			ok, lintErrs, errs = a.lint(run, c)
+			return append(errs, lintErrs...)
 		})
 
 		if prepErr != nil {
@@ -342,6 +348,48 @@ func (a *App) Lint(c LintConfigProvider) error {
 	return nil
 }
 
+func (a *App) Unittest(c UnittestConfigProvider) error {
+	var deferredUnittestErrors []error
+
+	err := a.ForEachState(func(run *Run) (ok bool, errs []error) {
+		var unittestErrs []error
+
+		// helm unittest needs local charts, so force download
+		prepErr := run.withPreparedCharts("unittest", state.ChartPrepareOptions{
+			ForceDownload:          true,
+			SkipRepos:              c.SkipRefresh() || c.SkipDeps(),
+			SkipRefresh:            c.SkipRefresh(),
+			SkipDeps:               c.SkipDeps(),
+			SkipCleanup:            c.SkipCleanup(),
+			Concurrency:            c.Concurrency(),
+			IncludeTransitiveNeeds: c.IncludeTransitiveNeeds(),
+		}, func() []error {
+			ok, unittestErrs, errs = a.unittest(run, c)
+			return append(errs, unittestErrs...)
+		})
+
+		if prepErr != nil {
+			errs = append(errs, prepErr)
+		}
+
+		if len(unittestErrs) > 0 {
+			deferredUnittestErrors = append(deferredUnittestErrors, unittestErrs...)
+		}
+
+		return
+	}, c.IncludeTransitiveNeeds())
+
+	if err != nil {
+		return err
+	}
+
+	if len(deferredUnittestErrors) > 0 {
+		return &MultiError{Errors: deferredUnittestErrors}
+	}
+
+	return nil
+}
+
 func (a *App) Fetch(c FetchConfigProvider) error {
 	return a.ForEachState(func(run *Run) (ok bool, errs []error) {
 		prepErr := run.withPreparedCharts("pull", state.ChartPrepareOptions{
@@ -352,7 +400,9 @@ func (a *App) Fetch(c FetchConfigProvider) error {
 			OutputDir:         c.OutputDir(),
 			OutputDirTemplate: c.OutputDirTemplate(),
 			Concurrency:       c.Concurrency(),
-		}, func() {})
+		}, func() []error {
+			return nil
+		})
 
 		if prepErr != nil {
 			errs = append(errs, prepErr)
@@ -377,8 +427,9 @@ func (a *App) Sync(c SyncConfigProvider) error {
 			IncludeTransitiveNeeds: c.IncludeNeeds(),
 			Validate:               c.Validate(),
 			Concurrency:            c.Concurrency(),
-		}, func() {
+		}, func() []error {
 			ok, errs = a.sync(run, c)
+			return errs
 		})
 
 		if prepErr != nil {
@@ -413,7 +464,7 @@ func (a *App) Apply(c ApplyConfigProvider) error {
 			Validate:               c.Validate(),
 			Concurrency:            c.Concurrency(),
 			IncludeTransitiveNeeds: c.IncludeNeeds(),
-		}, func() {
+		}, func() []error {
 			matched, updated, es := a.apply(run, c)
 
 			mut.Lock()
@@ -421,6 +472,7 @@ func (a *App) Apply(c ApplyConfigProvider) error {
 			mut.Unlock()
 
 			ok, errs = matched, es
+			return errs
 		})
 
 		if prepErr != nil {
@@ -449,8 +501,9 @@ func (a *App) Status(c StatusesConfigProvider) error {
 			SkipRepos:   true,
 			SkipDeps:    true,
 			Concurrency: c.Concurrency(),
-		}, func() {
+		}, func() []error {
 			ok, errs = a.status(run, c)
+			return errs
 		})
 
 		if err != nil {
@@ -471,8 +524,9 @@ func (a *App) Destroy(c DestroyConfigProvider) error {
 				Concurrency:   c.Concurrency(),
 				DeleteWait:    c.DeleteWait(),
 				DeleteTimeout: c.DeleteTimeout(),
-			}, func() {
+			}, func() []error {
 				ok, errs = a.delete(run, true, c)
+				return errs
 			})
 			if err != nil {
 				errs = append(errs, err)
@@ -497,8 +551,9 @@ func (a *App) Test(c TestConfigProvider) error {
 			SkipRefresh: c.SkipRefresh(),
 			SkipDeps:    c.SkipDeps(),
 			Concurrency: c.Concurrency(),
-		}, func() {
+		}, func() []error {
 			errs = a.test(run, c)
+			return errs
 		})
 
 		if err != nil {
@@ -516,11 +571,12 @@ func (a *App) PrintDAGState(c DAGConfigProvider) error {
 			SkipRepos:   true,
 			SkipDeps:    true,
 			Concurrency: 2,
-		}, func() {
+		}, func() []error {
 			err = a.dag(run)
 			if err != nil {
 				errs = append(errs, err)
 			}
+			return errs
 		})
 		return ok, errs
 	}, false, SetFilter(true))
@@ -532,7 +588,7 @@ func (a *App) PrintState(c StateConfigProvider) error {
 			SkipRepos:   true,
 			SkipDeps:    true,
 			Concurrency: 2,
-		}, func() {
+		}, func() []error {
 			if c.EmbedValues() {
 				for i := range run.state.Releases {
 					r := run.state.Releases[i]
@@ -540,7 +596,7 @@ func (a *App) PrintState(c StateConfigProvider) error {
 					values, err := run.state.LoadYAMLForEmbedding(&r, r.Values, r.MissingFileHandler, r.ValuesPathPrefix)
 					if err != nil {
 						errs = []error{err}
-						return
+						return errs
 					}
 
 					run.state.Releases[i].Values = values
@@ -548,7 +604,7 @@ func (a *App) PrintState(c StateConfigProvider) error {
 					secrets, err := run.state.LoadYAMLForEmbedding(&r, r.Secrets, r.MissingFileHandler, r.ValuesPathPrefix)
 					if err != nil {
 						errs = []error{err}
-						return
+						return errs
 					}
 
 					run.state.Releases[i].Secrets = secrets
@@ -558,17 +614,18 @@ func (a *App) PrintState(c StateConfigProvider) error {
 			stateYaml, err := run.state.ToYaml()
 			if err != nil {
 				errs = []error{err}
-				return
+				return errs
 			}
 
 			sourceFile, err := run.state.FullFilePath()
 			if err != nil {
 				errs = []error{err}
-				return
+				return errs
 			}
 			fmt.Printf("---\n#  Source: %s\n\n%+v", sourceFile, stateYaml)
 
 			errs = []error{}
+			return errs
 		})
 
 		if err != nil {
@@ -597,26 +654,30 @@ func (a *App) ListReleases(c ListConfigProvider) error {
 
 	err := a.ForEachState(func(run *Run) (_ bool, errs []error) {
 		var stateReleases []*HelmRelease
-		var err error
+		var listErr error
 
 		if !c.SkipCharts() {
-			err = run.withPreparedCharts("list", state.ChartPrepareOptions{
+			prepErr := run.withPreparedCharts("list", state.ChartPrepareOptions{
 				SkipRepos:   true,
 				SkipDeps:    true,
 				Concurrency: 2,
-			}, func() {
+			}, func() []error {
 				rel, err := a.list(run)
 				if err != nil {
-					panic(err)
+					errs = append(errs, err)
+					return []error{err}
 				}
 				stateReleases = rel
+				return nil
 			})
+			if prepErr != nil {
+				errs = append(errs, prepErr)
+			}
 		} else {
-			stateReleases, err = a.list(run)
-		}
-
-		if err != nil {
-			errs = append(errs, err)
+			stateReleases, listErr = a.list(run)
+			if listErr != nil {
+				errs = append(errs, listErr)
+			}
 		}
 
 		if len(stateReleases) > 0 {
@@ -658,13 +719,15 @@ func (a *App) ListReleases(c ListConfigProvider) error {
 func (a *App) list(run *Run) ([]*HelmRelease, error) {
 	var releases []*HelmRelease
 
-	for _, r := range run.state.Releases {
+	resolvedState, err := run.state.ResolveDeps()
+	if err != nil {
+		return nil, fmt.Errorf("unable to resolve dependencies for %s: %w", run.state.FilePath, err)
+	}
+
+	for _, r := range resolvedState.Releases {
 		labels := ""
 		if r.Labels == nil {
 			r.Labels = map[string]string{}
-		}
-		for k, v := range run.state.CommonLabels {
-			r.Labels[k] = v
 		}
 
 		var keys []string
@@ -679,7 +742,7 @@ func (a *App) list(run *Run) ([]*HelmRelease, error) {
 		}
 		labels = strings.Trim(labels, ",")
 
-		enabled, err := state.ConditionEnabled(r, run.state.Values())
+		enabled, err := state.ConditionEnabled(r, resolvedState.Values())
 		if err != nil {
 			return nil, err
 		}
@@ -713,6 +776,11 @@ func (a *App) within(dir string, do func() error) error {
 		return err
 	}
 
+	// Skip chdir if we're already in the target directory
+	if absDir == prev {
+		return do()
+	}
+
 	a.Logger.Debugf("changing working directory to \"%s\"", absDir)
 
 	if err := a.fs.Chdir(absDir); err != nil {
@@ -731,40 +799,6 @@ func (a *App) within(dir string, do func() error) error {
 	}
 
 	return appErr
-}
-
-func (a *App) visitStateFiles(fileOrDir string, opts LoadOpts, do func(string, string) error) error {
-	desiredStateFiles, err := a.findDesiredStateFiles(fileOrDir, opts)
-	if err != nil {
-		return appError("", err)
-	}
-
-	for _, relPath := range desiredStateFiles {
-		var file string
-		var dir string
-		if a.fs.DirectoryExistsAt(relPath) {
-			file = relPath
-			dir = relPath
-		} else {
-			file = filepath.Base(relPath)
-			dir = filepath.Dir(relPath)
-		}
-
-		a.Logger.Debugf("processing file \"%s\" in directory \"%s\"", file, dir)
-
-		absd, errAbsDir := a.fs.Abs(dir)
-		if errAbsDir != nil {
-			return errAbsDir
-		}
-		err := a.within(absd, func() error {
-			return do(file, absd)
-		})
-		if err != nil {
-			return appError(fmt.Sprintf("in %s/%s", dir, file), err)
-		}
-	}
-
-	return nil
 }
 
 func (a *App) loadDesiredStateFromYaml(file string, opts ...LoadOpts) (*state.HelmState, error) {
@@ -794,7 +828,14 @@ func (a *App) loadDesiredStateFromYamlWithBaseDir(file string, baseDir string, o
 		valsRuntime:             a.valsRuntime,
 	}
 
-	return ld.Load(file, op)
+	st, err := ld.Load(file, op)
+	if err != nil {
+		return nil, err
+	}
+
+	st.SetKubeconfig(a.Kubeconfig)
+
+	return st, nil
 }
 
 type helmKey struct {
@@ -851,10 +892,9 @@ func (a *App) getHelm(st *state.HelmState) (helmexec.Interface, error) {
 	return a.helms[key], nil
 }
 
-func (a *App) visitStates(fileOrDir string, defOpts LoadOpts, converge func(*state.HelmState) (bool, []error)) error {
-	return a.visitStatesWithContext(fileOrDir, defOpts, converge, nil)
-}
-
+// processStateFileParallel processes a single helmfile state file in a goroutine.
+// It is used for parallel processing of multiple helmfile.d files.
+// Results are communicated via errChan (errors) and matchChan (whether file had matching releases).
 func (a *App) processStateFileParallel(relPath string, defOpts LoadOpts, converge func(*state.HelmState) (bool, []error), sharedCtx *Context, errChan chan error, matchChan chan bool) {
 	var file string
 	var dir string
@@ -900,10 +940,19 @@ func (a *App) processStateFileParallel(relPath string, defOpts LoadOpts, converg
 
 	st.Selectors = opts.Selectors
 
+	// Track whether any releases matched across nested helmfiles and converge.
+	// Aggregate into a single send to matchChan to avoid overfilling the buffer
+	// (which is sized to len(desiredStateFiles), i.e. one send per goroutine).
+	anyMatched := false
+
 	if len(st.Helmfiles) > 0 && !opts.Reverse {
-		if err := a.processNestedHelmfiles(st, absd, file, defOpts, opts, converge, sharedCtx); err != nil {
+		matched, err := a.processNestedHelmfiles(st, absd, file, defOpts, opts, converge, sharedCtx)
+		if err != nil {
 			errChan <- err
 			return
+		}
+		if matched {
+			anyMatched = true
 		}
 	}
 
@@ -932,19 +981,31 @@ func (a *App) processStateFileParallel(relPath string, defOpts LoadOpts, converg
 		return
 	}
 
-	// Report if this file had matching releases
 	if processed {
-		matchChan <- true
+		anyMatched = true
 	}
 
 	if opts.Reverse && len(st.Helmfiles) > 0 {
-		if err := a.processNestedHelmfiles(st, absd, file, defOpts, opts, converge, sharedCtx); err != nil {
+		matched, err := a.processNestedHelmfiles(st, absd, file, defOpts, opts, converge, sharedCtx)
+		if err != nil {
 			errChan <- err
+			return
 		}
+		if matched {
+			anyMatched = true
+		}
+	}
+
+	if anyMatched {
+		matchChan <- true
 	}
 }
 
-func (a *App) processNestedHelmfiles(st *state.HelmState, absd, file string, defOpts, opts LoadOpts, converge func(*state.HelmState) (bool, []error), sharedCtx *Context) error {
+// processNestedHelmfiles processes sub-helmfiles referenced from a parent state.
+// It returns true if any nested helmfile successfully found matching releases,
+// which is used to update the caller's noMatchInHelmfiles tracking.
+func (a *App) processNestedHelmfiles(st *state.HelmState, absd, file string, defOpts, opts LoadOpts, converge func(*state.HelmState) (bool, []error), sharedCtx *Context) (bool, error) {
+	anyMatched := false
 	for i, m := range st.Helmfiles {
 		optsForNestedState := LoadOpts{
 			CalleePath:        filepath.Join(absd, file),
@@ -962,19 +1023,28 @@ func (a *App) processNestedHelmfiles(st *state.HelmState, absd, file string, def
 			switch err.(type) {
 			case *NoMatchingHelmfileError:
 			default:
-				return appError(fmt.Sprintf("in .helmfiles[%d]", i), err)
+				return anyMatched, appError(fmt.Sprintf("in .helmfiles[%d]", i), err)
 			}
+		} else {
+			anyMatched = true
 		}
 	}
-	return nil
+	return anyMatched, nil
 }
 
 func (a *App) visitStatesWithContext(fileOrDir string, defOpts LoadOpts, converge func(*state.HelmState) (bool, []error), sharedCtx *Context) error {
 	noMatchInHelmfiles := true
 
-	desiredStateFiles, err := a.findDesiredStateFiles(fileOrDir, defOpts)
+	desiredStateFiles, findErr := a.findDesiredStateFiles(fileOrDir, defOpts)
+	if findErr != nil {
+		return appError("", findErr)
+	}
 
-	if len(desiredStateFiles) > 1 {
+	// Process files in parallel if we have multiple files and parallel mode is enabled
+	shouldProcessInParallel := len(desiredStateFiles) > 1 && !a.SequentialHelmfiles
+
+	if shouldProcessInParallel {
+		// Parallel processing for multiple files (default behavior)
 		var wg sync.WaitGroup
 		errChan := make(chan error, len(desiredStateFiles))
 		matchChan := make(chan bool, len(desiredStateFiles))
@@ -1002,109 +1072,134 @@ func (a *App) visitStatesWithContext(fileOrDir string, defOpts LoadOpts, converg
 			noMatchInHelmfiles = false
 		}
 	} else {
-		// Sequential processing for single file
-		err = a.visitStateFiles(fileOrDir, defOpts, func(f, d string) (retErr error) {
+		// Sequential processing for single file or when --sequential-helmfiles is set.
+		//
+		// Two strategies for path resolution:
+		// - Single file: use os.Chdir (via within()) to preserve backward-compatible
+		//   chart path format in output (relative to the helmfile directory).
+		// - Multiple files with --sequential-helmfiles: use baseDir parameter to avoid
+		//   os.Chdir, which fixes relative env var paths like KUBECONFIG (#2409).
+		useBaseDir := len(desiredStateFiles) > 1
+
+		for _, relPath := range desiredStateFiles {
+			var file string
+			var dir string
+			if a.fs.DirectoryExistsAt(relPath) {
+				file = relPath
+				dir = relPath
+			} else {
+				file = filepath.Base(relPath)
+				dir = filepath.Dir(relPath)
+			}
+
+			absd, errAbsDir := a.fs.Abs(dir)
+			if errAbsDir != nil {
+				return errAbsDir
+			}
+
 			opts := defOpts.DeepCopy()
-
 			if opts.CalleePath == "" {
-				opts.CalleePath = f
+				opts.CalleePath = file
 			}
 
-			st, err := a.loadDesiredStateFromYaml(f, opts)
+			processFile := func() (retErr error) {
+				var st *state.HelmState
+				var loadErr error
 
-			ctx := context{app: a, st: st, retainValues: defOpts.RetainValuesFiles}
+				if useBaseDir {
+					// Multi-file sequential: use absolute baseDir for path resolution
+					// instead of os.Chdir to avoid breaking relative env var paths.
+					// Must use absd (absolute dir) to correctly resolve relative values/secrets paths.
+					st, loadErr = a.loadDesiredStateFromYamlWithBaseDir(file, absd, opts)
+				} else {
+					// Single file: CWD is set by within(), load without baseDir
+					st, loadErr = a.loadDesiredStateFromYaml(file, opts)
+				}
 
-			if err != nil {
-				switch stateLoadErr := err.(type) {
-				case *state.StateLoadError:
-					switch stateLoadErr.Cause.(type) {
-					case *state.UndefinedEnvError:
-						return nil
+				ctx := context{app: a, st: st, retainValues: defOpts.RetainValuesFiles}
+
+				if loadErr != nil {
+					switch stateLoadErr := loadErr.(type) {
+					case *state.StateLoadError:
+						switch stateLoadErr.Cause.(type) {
+						case *state.UndefinedEnvError:
+							return nil
+						default:
+							return ctx.wrapErrs(loadErr)
+						}
 					default:
-						return ctx.wrapErrs(err)
+						return ctx.wrapErrs(loadErr)
 					}
-				default:
-					return ctx.wrapErrs(err)
 				}
-			}
-			st.Selectors = opts.Selectors
 
-			visitSubHelmfiles := func() error {
-				if len(st.Helmfiles) > 0 {
-					noMatchInSubHelmfiles := true
-					for i, m := range st.Helmfiles {
-						optsForNestedState := LoadOpts{
-							CalleePath:        filepath.Join(d, f),
-							Environment:       m.Environment,
-							Reverse:           defOpts.Reverse,
-							RetainValuesFiles: defOpts.RetainValuesFiles,
-						}
-						if (m.Selectors == nil && !isExplicitSelectorInheritanceEnabled()) || m.SelectorsInherited {
-							optsForNestedState.Selectors = opts.Selectors
-						} else {
-							optsForNestedState.Selectors = m.Selectors
-						}
+				if st == nil {
+					return nil
+				}
 
-						if err := a.visitStates(m.Path, optsForNestedState, converge); err != nil {
-							switch err.(type) {
-							case *NoMatchingHelmfileError:
-							default:
-								return appError(fmt.Sprintf("in .helmfiles[%d]", i), err)
-							}
-						} else {
-							noMatchInSubHelmfiles = false
-						}
+				st.Selectors = opts.Selectors
+
+				if !opts.Reverse && len(st.Helmfiles) > 0 {
+					matched, err := a.processNestedHelmfiles(st, absd, file, defOpts, opts, converge, sharedCtx)
+					if err != nil {
+						return err
 					}
-					noMatchInHelmfiles = noMatchInHelmfiles && noMatchInSubHelmfiles
+					if matched {
+						noMatchInHelmfiles = false
+					}
 				}
+
+				templated, tmplErr := st.ExecuteTemplates()
+				if tmplErr != nil {
+					return appError(fmt.Sprintf("failed executing release templates in \"%s\"", file), tmplErr)
+				}
+
+				var (
+					processed bool
+					errs      []error
+				)
+
+				CleanWaitGroup.Add(1)
+				defer func() {
+					defer CleanWaitGroup.Done()
+					cleanErr := context{app: a, st: templated, retainValues: defOpts.RetainValuesFiles}.clean(errs)
+					if retErr == nil {
+						retErr = cleanErr
+					} else if cleanErr != nil {
+						a.Logger.Debugf("Failed to clean up temporary files generated while processing %q: %v", templated.FilePath, cleanErr)
+					}
+				}()
+
+				processed, errs = converge(templated)
+
+				if len(errs) > 0 {
+					return errs[0]
+				}
+
+				noMatchInHelmfiles = noMatchInHelmfiles && !processed
+
+				if opts.Reverse && len(st.Helmfiles) > 0 {
+					matched, err := a.processNestedHelmfiles(st, absd, file, defOpts, opts, converge, sharedCtx)
+					if err != nil {
+						return err
+					}
+					if matched {
+						noMatchInHelmfiles = false
+					}
+				}
+
 				return nil
 			}
 
-			if !opts.Reverse {
-				err = visitSubHelmfiles()
-				if err != nil {
-					return err
-				}
+			var fileErr error
+			if useBaseDir {
+				fileErr = processFile()
+			} else {
+				fileErr = a.within(absd, processFile)
 			}
-
-			templated, tmplErr := st.ExecuteTemplates()
-			if tmplErr != nil {
-				return appError(fmt.Sprintf("failed executing release templates in \"%s\"", f), tmplErr)
+			if fileErr != nil {
+				return appError(fmt.Sprintf("in %s/%s", dir, file), fileErr)
 			}
-
-			var (
-				processed bool
-				errs      []error
-			)
-
-			CleanWaitGroup.Add(1)
-			defer func() {
-				defer CleanWaitGroup.Done()
-				cleanErr := context{app: a, st: templated, retainValues: defOpts.RetainValuesFiles}.clean(errs)
-				if retErr == nil {
-					retErr = cleanErr
-				} else if cleanErr != nil {
-					a.Logger.Debugf("Failed to clean up temporary files generated while processing %q: %v", templated.FilePath, cleanErr)
-				}
-			}()
-
-			processed, errs = converge(templated)
-
-			noMatchInHelmfiles = noMatchInHelmfiles && !processed
-
-			if opts.Reverse {
-				err = visitSubHelmfiles()
-				if err != nil {
-					return err
-				}
-			}
-
-			return nil
-		})
-	}
-
-	if err != nil {
-		return err
+		}
 	}
 
 	if noMatchInHelmfiles {
@@ -1274,6 +1369,7 @@ func (a *App) visitStatesWithSelectorsAndRemoteSupportWithContext(fileOrDir stri
 
 	if len(envvals) > 0 {
 		opts.Environment.OverrideValues = envvals
+		opts.Environment.OverrideValuesAreCLI = true
 	}
 
 	a.remote = remote.NewRemote(a.Logger, "", a.fs)
@@ -1628,6 +1724,10 @@ Do you really want to apply?
 	// Traverse DAG of all the releases so that we don't suffer from false-positive missing dependencies
 	st.Releases = selectedAndNeededReleases
 
+	if len(releasesToBeUpdated) == 0 && len(releasesToBeDeleted) == 0 {
+		return true, false, nil
+	}
+
 	if !interactive || interactive && r.askForConfirmation(confMsg) {
 		if _, preapplyErrors := withDAG(st, helm, a.Logger, state.PlanOptions{Purpose: "invoking preapply hooks for", Reverse: true, SelectedReleases: toApplyWithNeeds, SkipNeeds: true}, a.WrapWithoutSelector(func(subst *state.HelmState, helm helmexec.Interface) []error {
 			for _, r := range subst.Releases {
@@ -1685,6 +1785,7 @@ Do you really want to apply?
 					Wait:                 c.Wait(),
 					WaitRetries:          c.WaitRetries(),
 					WaitForJobs:          c.WaitForJobs(),
+					Timeout:              c.Timeout(),
 					ReuseValues:          c.ReuseValues(),
 					ResetValues:          c.ResetValues(),
 					PostRenderer:         c.PostRenderer(),
@@ -1694,6 +1795,10 @@ Do you really want to apply?
 					HideNotes:            c.HideNotes(),
 					TakeOwnership:        c.TakeOwnership(),
 					SyncReleaseLabels:    c.SyncReleaseLabels(),
+					TrackMode:            c.TrackMode(),
+					TrackTimeout:         c.TrackTimeout(),
+					TrackLogs:            c.TrackLogs(),
+					Description:          c.Description(),
 				}
 				return subst.SyncReleases(&affectedReleases, helm, c.Values(), c.Concurrency(), syncOpts)
 			}))
@@ -1898,6 +2003,45 @@ func (a *App) lint(r *Run, c LintConfigProvider) (bool, []error, []error) {
 	})
 
 	return ok, deferredLintErrs, errs
+}
+
+func (a *App) unittest(r *Run, c UnittestConfigProvider) (bool, []error, []error) {
+	var deferredUnittestErrs []error
+
+	ok, errs := a.withNeeds(r, c, false, func(st *state.HelmState) []error {
+		helm := r.helm
+
+		args := GetArgs(c.Args(), st)
+
+		// Reset the extra args if already set, not to break `helm fetch` by adding the args intended for `unittest`
+		helm.SetExtraArgs()
+
+		if len(args) > 0 {
+			helm.SetExtraArgs(args...)
+		}
+
+		opts := &state.UnittestOpts{
+			Set:         c.Set(),
+			SkipCleanup: c.SkipCleanup(),
+			FailFast:    c.FailFast(),
+			Color:       c.Color(),
+			DebugPlugin: c.DebugPlugin(),
+		}
+		unittestErrs := st.UnittestReleases(helm, c.Values(), args, c.Concurrency(), opts)
+		if len(unittestErrs) == 1 {
+			if err, ok := unittestErrs[0].(helmexec.ExitError); ok {
+				if err.Code > 0 {
+					deferredUnittestErrs = append(deferredUnittestErrs, err)
+
+					return nil
+				}
+			}
+		}
+
+		return unittestErrs
+	})
+
+	return ok, deferredUnittestErrs, errs
 }
 
 func (a *App) status(r *Run, c StatusesConfigProvider) (bool, []error) {
@@ -2111,6 +2255,7 @@ Do you really want to sync?
 					Wait:                 c.Wait(),
 					WaitRetries:          c.WaitRetries(),
 					WaitForJobs:          c.WaitForJobs(),
+					Timeout:              c.Timeout(),
 					ReuseValues:          c.ReuseValues(),
 					ResetValues:          c.ResetValues(),
 					PostRenderer:         c.PostRenderer(),
@@ -2120,6 +2265,10 @@ Do you really want to sync?
 					TakeOwnership:        c.TakeOwnership(),
 					SkipSchemaValidation: c.SkipSchemaValidation(),
 					SyncReleaseLabels:    c.SyncReleaseLabels(),
+					TrackMode:            c.TrackMode(),
+					TrackTimeout:         c.TrackTimeout(),
+					TrackLogs:            c.TrackLogs(),
+					Description:          c.Description(),
 				}
 				return subst.SyncReleases(&affectedReleases, helm, c.Values(), c.Concurrency(), opts)
 			}))

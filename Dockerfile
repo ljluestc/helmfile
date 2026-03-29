@@ -30,7 +30,7 @@ ENV HELM_CONFIG_HOME="${HELM_CONFIG_HOME}"
 ARG HELM_DATA_HOME="${HOME}/.local/share/helm"
 ENV HELM_DATA_HOME="${HELM_DATA_HOME}"
 
-ARG HELM_VERSION="v4.0.1"
+ARG HELM_VERSION="v4.1.3"
 ENV HELM_VERSION="${HELM_VERSION}"
 ENV HELM_BIN="/usr/local/bin/helm"
 ARG HELM_LOCATION="https://get.helm.sh"
@@ -39,8 +39,8 @@ RUN set -x && \
     curl --retry 5 --retry-connrefused -LO "${HELM_LOCATION}/${HELM_FILENAME}" && \
     echo Verifying ${HELM_FILENAME}... && \
     case ${TARGETPLATFORM} in \
-    "linux/amd64")  HELM_SHA256="e0365548f01ed52a58a1181ad310b604a3244f59257425bb1739499372bdff60"  ;; \
-    "linux/arm64")  HELM_SHA256="959fa52d34e2e1f0154e3220ed5f22263c8593447647a43af07890bba4b004d1"  ;; \
+    "linux/amd64")  HELM_SHA256="02ce9722d541238f81459938b84cf47df2fdf1187493b4bfb2346754d82a4700"  ;; \
+    "linux/arm64")  HELM_SHA256="5db45e027cc8de4677ec869e5d803fc7631b0bab1c1eb62ac603a62d22359a43"  ;; \
     esac && \
     echo "${HELM_SHA256}  ${HELM_FILENAME}" | sha256sum -c && \
     echo Extracting ${HELM_FILENAME}... && \
@@ -95,7 +95,7 @@ RUN set -x && \
     [ "$(age-keygen --version)" = "${AGE_VERSION}" ]
 
 ARG HELM_SECRETS_VERSION="4.7.4"
-RUN helm plugin install https://github.com/databus23/helm-diff --version v3.14.1 --verify=false && \
+RUN helm plugin install https://github.com/databus23/helm-diff --version v3.15.3 --verify=false && \
     helm plugin install https://github.com/jkroepke/helm-secrets/releases/download/v${HELM_SECRETS_VERSION}/secrets-${HELM_SECRETS_VERSION}.tgz --verify=false && \
     helm plugin install https://github.com/jkroepke/helm-secrets/releases/download/v${HELM_SECRETS_VERSION}/secrets-getter-${HELM_SECRETS_VERSION}.tgz --verify=false && \
     helm plugin install https://github.com/jkroepke/helm-secrets/releases/download/v${HELM_SECRETS_VERSION}/secrets-post-renderer-${HELM_SECRETS_VERSION}.tgz --verify=false && \

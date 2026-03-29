@@ -2354,6 +2354,8 @@ type applyConfig struct {
 	suppressDiff             bool
 	noColor                  bool
 	color                    bool
+	failFast                 bool
+	debugPlugin              bool
 	context                  int
 	diffOutput               string
 	concurrency              int
@@ -2367,6 +2369,7 @@ type applyConfig struct {
 	wait                     bool
 	waitRetries              int
 	waitForJobs              bool
+	timeout                  int
 	reuseValues              bool
 	postRenderer             string
 	postRendererArgs         []string
@@ -2378,6 +2381,9 @@ type applyConfig struct {
 	takeOwnership            bool
 	syncReleaseLabels        bool
 	enforceNeedsAreInstalled bool
+	trackMode                string
+	trackTimeout             int
+	trackLogs                bool
 
 	// template-only options
 	includeCRDs, skipTests       bool
@@ -2402,6 +2408,10 @@ func (a applyConfig) WaitRetries() int {
 
 func (a applyConfig) WaitForJobs() bool {
 	return a.waitForJobs
+}
+
+func (a applyConfig) Timeout() int {
+	return a.timeout
 }
 
 func (a applyConfig) Values() []string {
@@ -2474,6 +2484,14 @@ func (a applyConfig) SuppressDiff() bool {
 
 func (a applyConfig) Color() bool {
 	return a.color
+}
+
+func (a applyConfig) FailFast() bool {
+	return a.failFast
+}
+
+func (a applyConfig) DebugPlugin() bool {
+	return a.debugPlugin
 }
 
 func (a applyConfig) NoColor() bool {
@@ -2578,6 +2596,22 @@ func (a applyConfig) TakeOwnership() bool {
 
 func (a applyConfig) SyncReleaseLabels() bool {
 	return a.syncReleaseLabels
+}
+
+func (a applyConfig) TrackMode() string {
+	return a.trackMode
+}
+
+func (a applyConfig) TrackTimeout() int {
+	return a.trackTimeout
+}
+
+func (a applyConfig) TrackLogs() bool {
+	return a.trackLogs
+}
+
+func (a applyConfig) Description() string {
+	return ""
 }
 
 type depsConfig struct {
@@ -2710,6 +2744,9 @@ func (helm *mockHelmExec) Fetch(chart string, flags ...string) error {
 func (helm *mockHelmExec) Lint(name, chart string, flags ...string) error {
 	return nil
 }
+func (helm *mockHelmExec) Unittest(name, chart string, flags ...string) error {
+	return nil
+}
 func (helm *mockHelmExec) IsHelm3() bool {
 	return !exectest.IsHelm4Enabled()
 }
@@ -2754,9 +2791,10 @@ releases:
 	}
 
 	var helm = &mockHelmExec{}
+	// Issue #2309: --kube-context is now added to template flags
 	var wantReleases = []mockTemplates{
-		{name: "myrelease1", chart: "stable/mychart1", flags: []string{"--namespace", "testNamespace", "--set", "foo=a", "--set", "bar=b", "--output-dir", "output/subdir/helmfile-[a-z0-9]{8}-myrelease1"}},
-		{name: "myrelease2", chart: "stable/mychart2", flags: []string{"--namespace", "testNamespace", "--set", "foo=a", "--set", "bar=b", "--output-dir", "output/subdir/helmfile-[a-z0-9]{8}-myrelease2"}},
+		{name: "myrelease1", chart: "stable/mychart1", flags: []string{"--kube-context", "default", "--namespace", "testNamespace", "--set", "foo=a", "--set", "bar=b", "--output-dir", "output/subdir/helmfile-[a-z0-9]{8}-myrelease1"}},
+		{name: "myrelease2", chart: "stable/mychart2", flags: []string{"--kube-context", "default", "--namespace", "testNamespace", "--set", "foo=a", "--set", "bar=b", "--output-dir", "output/subdir/helmfile-[a-z0-9]{8}-myrelease2"}},
 	}
 
 	var wantRepos = []mockRepo{
@@ -2806,7 +2844,8 @@ releases:
 			t.Errorf("chart = [%v], want %v", helm.templated[i].chart, wantReleases[i].chart)
 		}
 		for j := range wantReleases[i].flags {
-			if j == 7 {
+			// Issue #2309: regex index changed from 7 to 9 due to added --kube-context flag
+			if j == 9 {
 				matched, _ := regexp.Match(wantReleases[i].flags[j], []byte(helm.templated[i].flags[j]))
 				if !matched {
 					t.Errorf("HelmState.TemplateReleases() = [%v], want %v", helm.templated[i].flags[j], wantReleases[i].flags[j])
@@ -2834,8 +2873,9 @@ releases:
 	}
 
 	var helm = &mockHelmExec{}
+	// Issue #2309: --kube-context is now added to template flags
 	var wantReleases = []mockTemplates{
-		{name: "myrelease1", chart: "stable/mychart1", flags: []string{"--api-versions", "helmfile.test/v1", "--api-versions", "helmfile.test/v2", "--kube-version", "v1.21", "--namespace", "testNamespace", "--output-dir", "output/subdir/helmfile-[a-z0-9]{8}-myrelease1"}},
+		{name: "myrelease1", chart: "stable/mychart1", flags: []string{"--api-versions", "helmfile.test/v1", "--api-versions", "helmfile.test/v2", "--kube-version", "v1.21", "--kube-context", "default", "--namespace", "testNamespace", "--output-dir", "output/subdir/helmfile-[a-z0-9]{8}-myrelease1"}},
 	}
 
 	var buffer bytes.Buffer
@@ -2874,7 +2914,8 @@ releases:
 			t.Errorf("chart = [%v], want %v", helm.templated[i].chart, wantReleases[i].chart)
 		}
 		for j := range wantReleases[i].flags {
-			if j == 9 {
+			// Issue #2309: regex index changed from 9 to 11 due to added --kube-context flag
+			if j == 11 {
 				matched, _ := regexp.Match(wantReleases[i].flags[j], []byte(helm.templated[i].flags[j]))
 				if !matched {
 					t.Errorf("HelmState.TemplateReleases() = [%v], want %v", helm.templated[i].flags[j], wantReleases[i].flags[j])
@@ -4454,4 +4495,247 @@ func TestGetArgs(t *testing.T) {
 
 		require.Equalf(t, test.expected, strings.Join(receivedArgs, " "), "expected args %s, received args %s", test.expected, strings.Join(receivedArgs, " "))
 	}
+}
+
+func TestRenderYamlEnvVar(t *testing.T) {
+	testCases := []struct {
+		name           string
+		envValue       string
+		filename       string
+		content        string
+		shouldRender   bool
+		expectErr      bool
+		expectedOutput string
+	}{
+		{
+			name:           "default behavior - helmfile.yaml without .gotmpl is NOT rendered",
+			envValue:       "",
+			filename:       "helmfile.yaml",
+			content:        "releases:\n- name: {{ .Environment.Name }}-app\n  chart: test/chart\n",
+			shouldRender:   false,
+			expectErr:      false,
+			expectedOutput: "",
+		},
+		{
+			name:           "default behavior - helmfile.yaml.gotmpl IS rendered",
+			envValue:       "",
+			filename:       "helmfile.yaml.gotmpl",
+			content:        "releases:\n- name: {{ .Environment.Name }}-app\n  chart: test/chart\n",
+			shouldRender:   true,
+			expectErr:      false,
+			expectedOutput: "default-app",
+		},
+		{
+			name:           "HELMFILE_RENDER_YAML=true - helmfile.yaml IS rendered",
+			envValue:       "true",
+			filename:       "helmfile.yaml",
+			content:        "releases:\n- name: {{ .Environment.Name }}-app\n  chart: test/chart\n",
+			shouldRender:   true,
+			expectErr:      false,
+			expectedOutput: "default-app",
+		},
+		{
+			name:           "HELMFILE_RENDER_YAML=true - helmfile.yaml.gotmpl IS rendered",
+			envValue:       "true",
+			filename:       "helmfile.yaml.gotmpl",
+			content:        "releases:\n- name: {{ .Environment.Name }}-app\n  chart: test/chart\n",
+			shouldRender:   true,
+			expectErr:      false,
+			expectedOutput: "default-app",
+		},
+		{
+			name:           "HELMFILE_RENDER_YAML=false - helmfile.yaml is NOT rendered",
+			envValue:       "false",
+			filename:       "helmfile.yaml",
+			content:        "releases:\n- name: {{ .Environment.Name }}-app\n  chart: test/chart\n",
+			shouldRender:   false,
+			expectErr:      false,
+			expectedOutput: "",
+		},
+		{
+			name:           "HELMFILE_RENDER_YAML=false - helmfile.yaml.gotmpl IS rendered (extension takes precedence)",
+			envValue:       "false",
+			filename:       "helmfile.yaml.gotmpl",
+			content:        "releases:\n- name: {{ .Environment.Name }}-app\n  chart: test/chart\n",
+			shouldRender:   true,
+			expectErr:      false,
+			expectedOutput: "default-app",
+		},
+		{
+			name:           "HELMFILE_RENDER_YAML=TRUE (uppercase) - should NOT render (strict comparison)",
+			envValue:       "TRUE",
+			filename:       "helmfile.yaml",
+			content:        "releases:\n- name: {{ .Environment.Name }}-app\n  chart: test/chart\n",
+			shouldRender:   false,
+			expectErr:      false,
+			expectedOutput: "",
+		},
+		{
+			name:           "HELMFILE_RENDER_YAML=1 - should NOT render (strict comparison)",
+			envValue:       "1",
+			filename:       "helmfile.yaml",
+			content:        "releases:\n- name: {{ .Environment.Name }}-app\n  chart: test/chart\n",
+			shouldRender:   false,
+			expectErr:      false,
+			expectedOutput: "",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.envValue != "" {
+				t.Setenv(envvar.RenderYaml, tc.envValue)
+			}
+
+			files := map[string]string{
+				fmt.Sprintf("/path/to/%s", tc.filename): tc.content,
+			}
+
+			app := &App{
+				OverrideHelmBinary:              DefaultHelmBinary,
+				OverrideKubeContext:             "default",
+				DisableKubeVersionAutoDetection: true,
+				Logger:                          newAppTestLogger(),
+				Namespace:                       "",
+				Env:                             "default",
+				FileOrDir:                       tc.filename,
+			}
+
+			expectNoCallsToHelm(app)
+			app = appWithFs(app, files)
+
+			err := app.ForEachState(
+				func(run *Run) (bool, []error) {
+					if tc.shouldRender {
+						// If rendering is expected, check that the template was rendered
+						require.NotNil(t, run.state)
+						require.NotEmpty(t, run.state.Releases)
+						// The rendered name should be "default-app" not "{{ .Environment.Name }}-app"
+						actualName := run.state.Releases[0].Name
+						require.Equal(t, tc.expectedOutput, actualName, "expected release name to be rendered as %s, got %s", tc.expectedOutput, actualName)
+					} else {
+						// If rendering is NOT expected, check that the template was NOT rendered
+						// In this case, the YAML parser will likely fail or the template syntax will remain
+						// We just verify that if there are releases, they contain the unrendered template
+						if run.state != nil && len(run.state.Releases) > 0 {
+							actualName := run.state.Releases[0].Name
+							require.Contains(t, actualName, "{{", "expected template syntax to remain unrendered, got %s", actualName)
+						}
+					}
+					return false, nil
+				},
+				false,
+				SetFilter(true),
+			)
+
+			if tc.expectErr {
+				require.Error(t, err)
+			} else {
+				if err != nil && !tc.shouldRender {
+					// It's OK if there's an error when we don't expect rendering
+					// because the template syntax might cause YAML parsing issues
+					t.Logf("Expected error when not rendering template: %v", err)
+				} else if tc.shouldRender {
+					require.NoError(t, err, "unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// TestTemplate_HelmDefaultsSkipDepsSkipRefresh verifies that helmDefaults.skipDeps
+// and helmDefaults.skipRefresh cause SyncReposOnce to be skipped, so no AddRepo
+// calls are made. This is a regression test for issue #2269/#2296.
+func TestTemplate_HelmDefaultsSkipDepsSkipRefresh(t *testing.T) {
+	files := map[string]string{
+		"/path/to/helmfile.yaml": `
+repositories:
+- name: stable
+  url: https://kubernetes-charts.storage.googleapis.com
+
+helmDefaults:
+  skipDeps: true
+  skipRefresh: true
+
+releases:
+- name: myrelease1
+  chart: stable/mychart1
+`,
+	}
+
+	var helm = &mockHelmExec{}
+
+	var buffer bytes.Buffer
+	syncWriter := testhelper.NewSyncWriter(&buffer)
+	logger := helmexec.NewLogger(syncWriter, "debug")
+
+	valsRuntime, err := vals.New(vals.Options{CacheSize: 32})
+	require.NoError(t, err)
+
+	app := appWithFs(&App{
+		OverrideHelmBinary:              DefaultHelmBinary,
+		fs:                              ffs.DefaultFileSystem(),
+		OverrideKubeContext:             "default",
+		DisableKubeVersionAutoDetection: true,
+		Env:                             "default",
+		Logger:                          logger,
+		helms: map[helmKey]helmexec.Interface{
+			createHelmKey("helm", "default"): helm,
+		},
+		Namespace:   "testNamespace",
+		valsRuntime: valsRuntime,
+	}, files)
+
+	// Run Template with skipDeps=false to simulate no CLI flags being passed.
+	// The helmDefaults should still cause repos to be skipped.
+	err = app.Template(configImpl{set: []string{"foo=a"}, skipDeps: false})
+	require.NoError(t, err)
+
+	// The key assertion: repos should be empty because helmDefaults.skipDeps
+	// and helmDefaults.skipRefresh caused SyncReposOnce to be skipped.
+	assert.Empty(t, helm.repos, "expected no AddRepo calls when helmDefaults.skipDeps and helmDefaults.skipRefresh are true")
+}
+
+// TestHelmBinaryPreservedInMultiDocumentYAML tests that helmBinary is preserved
+// when processing multi-document YAML files at the loadDesiredStateFromYaml level.
+// This is a regression test for issue #2319.
+func TestHelmBinaryPreservedInMultiDocumentYAML(t *testing.T) {
+	statePath := "/path/to/helmfile.yaml"
+	stateContent := `helmBinary: /usr/bin/werf
+
+helmDefaults:
+  createNamespace: true
+
+---
+
+releases:
+  - name: myapp
+    chart: stable/nginx
+`
+	testFs := testhelper.NewTestFs(map[string]string{
+		statePath: stateContent,
+	})
+
+	app := &App{
+		OverrideHelmBinary:              DefaultHelmBinary,
+		OverrideKubeContext:             "",
+		DisableKubeVersionAutoDetection: true,
+		Logger:                          newAppTestLogger(),
+		Namespace:                       "",
+		Env:                             "default",
+		FileOrDir:                       statePath,
+	}
+	app = injectFs(app, testFs)
+	app.remote = remote.NewRemote(app.Logger, testFs.Cwd, app.fs)
+
+	expectNoCallsToHelm(app)
+
+	st, err := app.loadDesiredStateFromYaml(statePath, LoadOpts{})
+	require.NoError(t, err, "unexpected error loading helmfile")
+	require.NotNil(t, st, "expected state to be loaded")
+
+	// The key assertion: helmBinary from document 1 should be preserved
+	// even though document 2 has no helmBinary setting
+	assert.Equal(t, "/usr/bin/werf", st.DefaultHelmBinary,
+		"helmBinary from first document should be preserved, not reset to default 'helm'")
 }

@@ -15,6 +15,7 @@ const (
 	GoYamlV3              = "HELMFILE_GO_YAML_V3"
 	CacheHome             = "HELMFILE_CACHE_HOME"
 	Interactive           = "HELMFILE_INTERACTIVE"
+	RenderYaml            = "HELMFILE_RENDER_YAML" // force helmfile.yaml to be rendered as template regardless of extension, expecting "true" lower case
 
 	// AWSSDKLogLevel controls AWS SDK logging level
 	// Valid values: "off" (default), "minimal", "standard", "verbose", or custom (e.g., "request,response")
@@ -27,4 +28,10 @@ const (
 	// Can be overridden by AWS_SDK_GO_LOG_LEVEL environment variable
 	// See issue #2270 and vals PR #893
 	AWSSDKLogLevel = "HELMFILE_AWS_SDK_LOG_LEVEL"
+
+	// ValsFailOnMissingKeyInMap controls whether vals should fail when a key is missing in a map.
+	// When set to "true", vals returns an error if a referenced key does not exist in the secret map.
+	// Default is false for backward compatibility (returns empty string for missing keys).
+	// See issue #1563
+	ValsFailOnMissingKeyInMap = "HELMFILE_VALS_FAIL_ON_MISSING_KEY_IN_MAP"
 )

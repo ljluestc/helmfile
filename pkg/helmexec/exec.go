@@ -51,6 +51,8 @@ type execer struct {
 	decryptedSecretMutex sync.Mutex
 	decryptedSecrets     map[string]*decryptedSecret
 	writeTempFile        func([]byte) (string, error)
+	unittestPluginOnce   sync.Once
+	unittestPluginErr    error
 }
 
 func NewLogger(writer io.Writer, logLevel string) *zap.SugaredLogger {
@@ -112,37 +114,50 @@ type PluginMetadata struct {
 }
 
 func GetPluginVersion(name, pluginsDir string) (*semver.Version, error) {
-	// Scan pluginsDir for subdirectories containing plugin.yaml
-	entries, err := os.ReadDir(pluginsDir)
-	if err != nil {
-		// If directory doesn't exist, treat as plugin not installed
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("plugin %s not installed", name)
-		}
-		return nil, err
-	}
+	pluginDirs := filepath.SplitList(pluginsDir)
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
+	var firstReadErr error
+	for _, dir := range pluginDirs {
+		if dir == "" {
 			continue
 		}
 
-		pluginFile := filepath.Join(pluginsDir, entry.Name(), "plugin.yaml")
-		data, err := os.ReadFile(pluginFile)
+		entries, err := os.ReadDir(dir)
 		if err != nil {
-			continue // Skip if plugin.yaml doesn't exist in this directory
+			if os.IsNotExist(err) {
+				continue
+			}
+			if firstReadErr == nil {
+				firstReadErr = err
+			}
+			continue
 		}
 
-		var metadata PluginMetadata
-		if err := yaml.Unmarshal(data, &metadata); err != nil {
-			continue // Skip if plugin.yaml is malformed
-		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
 
-		if metadata.Name == name {
-			return semver.NewVersion(metadata.Version)
+			pluginFile := filepath.Join(dir, entry.Name(), "plugin.yaml")
+			data, err := os.ReadFile(pluginFile)
+			if err != nil {
+				continue
+			}
+
+			var metadata PluginMetadata
+			if err := yaml.Unmarshal(data, &metadata); err != nil {
+				continue
+			}
+
+			if metadata.Name == name {
+				return semver.NewVersion(metadata.Version)
+			}
 		}
 	}
 
+	if firstReadErr != nil {
+		return nil, firstReadErr
+	}
 	return nil, fmt.Errorf("plugin %s not installed", name)
 }
 
@@ -204,6 +219,12 @@ func (helm *execer) AddRepo(name, repository, cafile, certfile, keyfile, usernam
 		return fmt.Errorf("empty field name")
 	}
 
+	savedExtra := helm.extra
+	helm.extra = []string{}
+	defer func() {
+		helm.extra = savedExtra
+	}()
+
 	switch managed {
 	case "acr":
 		helm.logger.Infof("Adding repo %v (acr)", name)
@@ -211,16 +232,11 @@ func (helm *execer) AddRepo(name, repository, cafile, certfile, keyfile, usernam
 	case "":
 		args = append(args, "repo", "add", name, repository)
 
-		// --force-update is the default behavior in Helm 4, but needs to be explicit in Helm 3
+		// --force-update is needed for both Helm 3.3.2+ and Helm 4
+		// to ensure repository indexes are updated when a repository already exists
 		// See https://github.com/helm/helm/pull/8777
-		if helm.IsHelm3() {
-			if cons, err := semver.NewConstraint(">= 3.3.2"); err == nil {
-				if !helm.options.DisableForceUpdate && cons.Check(helm.version) {
-					args = append(args, "--force-update")
-				}
-			} else {
-				panic(err)
-			}
+		if !helm.options.DisableForceUpdate && (helm.IsHelm4() || helm.IsVersionAtLeast("3.3.2")) {
+			args = append(args, "--force-update")
 		}
 
 		if certfile != "" && keyfile != "" {
@@ -257,6 +273,11 @@ func (helm *execer) AddRepo(name, repository, cafile, certfile, keyfile, usernam
 
 func (helm *execer) UpdateRepo() error {
 	helm.logger.Info("Updating repo")
+	savedExtra := helm.extra
+	helm.extra = []string{}
+	defer func() {
+		helm.extra = savedExtra
+	}()
 	out, err := helm.exec([]string{"repo", "update"}, map[string]string{}, nil)
 	helm.info(out)
 	return err
@@ -738,6 +759,30 @@ func (helm *execer) Lint(name, chart string, flags ...string) error {
 	return err
 }
 
+func (helm *execer) Unittest(name, chart string, flags ...string) error {
+	// Check if the helm-unittest plugin is installed (cached across invocations)
+	helm.unittestPluginOnce.Do(func() {
+		var pluginsDir string
+		if helm.IsHelm3() {
+			pluginsDir = cliv3.New().PluginsDirectory
+		} else {
+			pluginsDir = cliv4.New().PluginsDirectory
+		}
+		_, err := GetPluginVersion("unittest", pluginsDir)
+		if err != nil {
+			helm.unittestPluginErr = fmt.Errorf("helm-unittest plugin is required for `helmfile unittest`. Install it with: helm plugin install https://github.com/helm-unittest/helm-unittest: %w", err)
+		}
+	})
+	if helm.unittestPluginErr != nil {
+		return helm.unittestPluginErr
+	}
+
+	helm.logger.Infof("Unit testing release=%v, chart=%v", name, chart)
+	out, err := helm.exec(append([]string{"unittest", chart}, flags...), map[string]string{}, nil)
+	helm.write(nil, out)
+	return err
+}
+
 func (helm *execer) Fetch(chart string, flags ...string) error {
 	helm.logger.Infof("Fetching %v", redactedURL(chart))
 	out, err := helm.exec(append([]string{"fetch", chart}, flags...), map[string]string{}, nil)
@@ -956,8 +1001,16 @@ func (helm *execer) IsVersionAtLeast(versionStr string) bool {
 }
 
 func resolveOciChart(ociChart string) (ociChartURL, ociChartTag string) {
+	// Split off digest (e.g., @sha256:abc) first so the colon in sha256:
+	// does not confuse the version tag search below.
+	var digest string
+	if atIdx := strings.Index(ociChart, "@"); atIdx >= 0 {
+		digest = ociChart[atIdx:] // includes the "@"
+		ociChart = ociChart[:atIdx]
+	}
+
 	var urlTagIndex int
-	// Get the last : index
+	// Get the last : index in the pre-digest part
 	// e.g.,
 	// 1. registry:443/helm-charts
 	// 2. registry/helm-charts:latest
@@ -969,7 +1022,7 @@ func resolveOciChart(ociChart string) (ociChartURL, ociChartTag string) {
 		urlTagIndex = strings.LastIndex(ociChart, ":")
 		ociChartTag = ociChart[urlTagIndex+1:]
 	}
-	ociChartURL = fmt.Sprintf("oci://%s", ociChart[:urlTagIndex])
+	ociChartURL = fmt.Sprintf("oci://%s%s", ociChart[:urlTagIndex], digest)
 	return ociChartURL, ociChartTag
 }
 

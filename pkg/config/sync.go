@@ -1,5 +1,10 @@
 package config
 
+import (
+	"fmt"
+	"slices"
+)
+
 // SyncOptions is the options for the build command
 type SyncOptions struct {
 	// Set is the set flag
@@ -48,6 +53,14 @@ type SyncOptions struct {
 	TakeOwnership bool
 	// SyncReleaseLabels is the sync release labels flag
 	SyncReleaseLabels bool
+	// TrackMode specifies whether to use 'helm' or 'kubedog' for tracking resources
+	TrackMode string
+	// TrackTimeout specifies timeout for kubedog tracking (in seconds)
+	TrackTimeout int
+	// TrackLogs enables log streaming with kubedog
+	TrackLogs bool
+	// Description is the description that will be passed to helm upgrade --description
+	Description string
 }
 
 // NewSyncOptions creates a new Apply
@@ -186,4 +199,32 @@ func (t *SyncImpl) TakeOwnership() bool {
 
 func (t *SyncImpl) SyncReleaseLabels() bool {
 	return t.SyncOptions.SyncReleaseLabels
+}
+
+// TrackMode returns the track mode.
+func (t *SyncImpl) TrackMode() string {
+	return t.SyncOptions.TrackMode
+}
+
+// TrackTimeout returns the track timeout.
+func (t *SyncImpl) TrackTimeout() int {
+	return t.SyncOptions.TrackTimeout
+}
+
+// TrackLogs returns the track logs flag.
+func (t *SyncImpl) TrackLogs() bool {
+	return t.SyncOptions.TrackLogs
+}
+
+// Description returns the description.
+func (t *SyncImpl) Description() string {
+	return t.SyncOptions.Description
+}
+
+func (t *SyncImpl) ValidateConfig() error {
+	validTrackModes := []string{"helm", "helm-legacy", "kubedog"}
+	if t.SyncOptions.TrackMode != "" && !slices.Contains(validTrackModes, t.SyncOptions.TrackMode) {
+		return fmt.Errorf("--track-mode must be 'helm', 'helm-legacy', or 'kubedog', got: %s", t.SyncOptions.TrackMode)
+	}
+	return t.GlobalImpl.ValidateConfig()
 }

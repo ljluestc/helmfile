@@ -18,13 +18,14 @@ import (
 )
 
 const (
-	HelmRequiredVersion           = "v3.18.6" // Minimum required version (supports Helm 3.x and 4.x)
-	HelmDiffRecommendedVersion    = "v3.14.1"
-	HelmRecommendedVersion        = "v4.0.1" // Recommended to use latest Helm 4
-	HelmSecretsRecommendedVersion = "v4.7.4" // v4.7.0+ works with both Helm 3 (single plugin) and Helm 4 (split plugin architecture)
-	HelmGitRecommendedVersion     = "v1.3.0"
-	HelmS3RecommendedVersion      = "v0.16.3"
-	HelmInstallCommand            = "https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3" // Default to Helm 3 script for compatibility
+	HelmRequiredVersion            = "v3.18.6" // Minimum required version (supports Helm 3.x and 4.x)
+	HelmDiffRecommendedVersion     = "v3.15.3"
+	HelmRecommendedVersion         = "v4.1.0" // Recommended to use latest Helm 4
+	HelmSecretsRecommendedVersion  = "v4.7.4" // v4.7.0+ works with both Helm 3 (single plugin) and Helm 4 (split plugin architecture)
+	HelmGitRecommendedVersion      = "v1.3.0"
+	HelmS3RecommendedVersion       = "v0.16.3"
+	HelmUnittestRecommendedVersion = "v1.0.3"
+	HelmInstallCommand             = "https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3" // Default to Helm 3 script for compatibility
 )
 
 var (
@@ -53,6 +54,11 @@ var (
 			name:    "helm-git",
 			version: HelmGitRecommendedVersion,
 			repo:    "https://github.com/aslafy-z/helm-git.git",
+		},
+		{
+			name:    "unittest",
+			version: HelmUnittestRecommendedVersion,
+			repo:    "https://github.com/helm-unittest/helm-unittest",
 		},
 	}
 )
@@ -190,9 +196,20 @@ func (h *HelmfileInit) CheckHelmPlugins() error {
 
 			err = helm.AddPlugin(p.name, p.repo, p.version)
 			if err != nil {
-				return err
+				// Check if plugin was installed despite the error (common on Windows where
+				// plugin install scripts fail due to missing 'sh' but the binary is placed correctly)
+				installedVersion, verifyErr := helmexec.GetPluginVersion(p.name, pluginsDir)
+				if verifyErr != nil {
+					return err // Plugin truly not installed
+				}
+				h.logger.Warnf("helm plugin %q install reported an error, but plugin is present at version %s: %v", p.name, installedVersion, err)
+				pluginVersion = installedVersion
+			} else {
+				pluginVersion, err = helmexec.GetPluginVersion(p.name, pluginsDir)
+				if err != nil {
+					return fmt.Errorf("plugin %q was installed but version could not be verified: %w", p.name, err)
+				}
 			}
-			pluginVersion, _ = helmexec.GetPluginVersion(p.name, pluginsDir)
 		}
 		requiredVersion, _ := semver.NewVersion(p.version)
 		if pluginVersion.LessThan(requiredVersion) {
@@ -202,7 +219,16 @@ func (h *HelmfileInit) CheckHelmPlugins() error {
 			}
 			err = helm.UpdatePlugin(p.name)
 			if err != nil {
-				return err
+				// Check if plugin was updated despite the error
+				updatedVersion, verifyErr := helmexec.GetPluginVersion(p.name, pluginsDir)
+				if verifyErr != nil {
+					return err
+				}
+				if !updatedVersion.LessThan(requiredVersion) {
+					h.logger.Warnf("helm plugin %q update reported an error, but plugin is at version %s: %v", p.name, updatedVersion, err)
+				} else {
+					return err
+				}
 			}
 		}
 	}

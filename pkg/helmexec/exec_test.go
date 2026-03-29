@@ -147,8 +147,16 @@ exec: helm --kubeconfig config --kube-context dev repo add myRepo https://repo.e
 `,
 		},
 		{
-			name:    "Helm 4.0.1 (force-update is default)",
+			name:    "Helm 4.0.1 (force-update needed)",
 			version: "4.0.1",
+			expected: `Adding repo myRepo https://repo.example.com/
+exec: helm --kubeconfig config --kube-context dev repo add myRepo https://repo.example.com/ --force-update --cert-file cert.pem --key-file key.pem
+`,
+		},
+		{
+			name:               "Helm 4.0.1 (force-update disabled)",
+			version:            "4.0.1",
+			disableForceUpdate: true,
 			expected: `Adding repo myRepo https://repo.example.com/
 exec: helm --kubeconfig config --kube-context dev repo add myRepo https://repo.example.com/ --cert-file cert.pem --key-file key.pem
 `,
@@ -188,7 +196,7 @@ func Test_AddRepo(t *testing.T) {
 	buffer.Reset()
 	err = helm.AddRepo("myRepo", "https://repo.example.com/", "", "cert.pem", "key.pem", "", "", "", false, false)
 	expected := `Adding repo myRepo https://repo.example.com/
-exec: helm --kubeconfig config --kube-context dev repo add myRepo https://repo.example.com/ --cert-file cert.pem --key-file key.pem
+exec: helm --kubeconfig config --kube-context dev repo add myRepo https://repo.example.com/ --force-update --cert-file cert.pem --key-file key.pem
 `
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
@@ -202,7 +210,7 @@ exec: helm --kubeconfig config --kube-context dev repo add myRepo https://repo.e
 	buffer.Reset()
 	err = helm.AddRepo("myRepo", "https://repo.example.com/", "ca.crt", "", "", "", "", "", false, false)
 	expected = `Adding repo myRepo https://repo.example.com/
-exec: helm --kubeconfig config --kube-context dev repo add myRepo https://repo.example.com/ --ca-file ca.crt
+exec: helm --kubeconfig config --kube-context dev repo add myRepo https://repo.example.com/ --force-update --ca-file ca.crt
 `
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
@@ -216,7 +224,7 @@ exec: helm --kubeconfig config --kube-context dev repo add myRepo https://repo.e
 	buffer.Reset()
 	err = helm.AddRepo("myRepo", "https://repo.example.com/", "", "", "", "", "", "", false, false)
 	expected = `Adding repo myRepo https://repo.example.com/
-exec: helm --kubeconfig config --kube-context dev repo add myRepo https://repo.example.com/
+exec: helm --kubeconfig config --kube-context dev repo add myRepo https://repo.example.com/ --force-update
 `
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
@@ -257,11 +265,12 @@ exec: az acr helm repo add --name acrRepo:
 	buffer.Reset()
 	err = helm.AddRepo("myRepo", "https://repo.example.com/", "", "", "", "example_user", "example_password", "", false, false)
 	expected = `Adding repo myRepo https://repo.example.com/
-exec: helm --kubeconfig config --kube-context dev repo add myRepo https://repo.example.com/ --username example_user --password-stdin
+exec: helm --kubeconfig config --kube-context dev repo add myRepo https://repo.example.com/ --force-update --username example_user --password-stdin
 `
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
+
 	if buffer.String() != expected {
 		t.Errorf("helmexec.AddRepo()\nactual = %v\nexpect = %v", buffer.String(), expected)
 	}
@@ -270,7 +279,7 @@ exec: helm --kubeconfig config --kube-context dev repo add myRepo https://repo.e
 	buffer.Reset()
 	err = helm.AddRepo("myRepo", "https://repo.example.com/", "", "", "", "example_user", "example_password", "", true, false)
 	expected = `Adding repo myRepo https://repo.example.com/
-exec: helm --kubeconfig config --kube-context dev repo add myRepo https://repo.example.com/ --pass-credentials --username example_user --password-stdin
+exec: helm --kubeconfig config --kube-context dev repo add myRepo https://repo.example.com/ --force-update --pass-credentials --username example_user --password-stdin
 `
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
@@ -285,8 +294,8 @@ exec: helm --kubeconfig config --kube-context dev repo add myRepo https://repo.e
 	buffer.Reset()
 	err = helm.AddRepo("myRepo", "https://repo.example.com/", "", "", "", "", "", "", false, true)
 	expected = `Adding repo myRepo https://repo.example.com/
-	exec: helm --kubeconfig config --kube-context dev repo add myRepo https://repo.example.com/ --insecure-skip-tls-verify
-	`
+exec: helm --kubeconfig config --kube-context dev repo add myRepo https://repo.example.com/ --force-update --insecure-skip-tls-verify
+`
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -1174,7 +1183,7 @@ exec: helm --kubeconfig config --kube-context dev chart export chart --destinati
 
 var logLevelTests = map[string]string{
 	"debug": `Adding repo myRepo https://repo.example.com/
-exec: helm repo add myRepo https://repo.example.com/ --username example_user --password example_password
+exec: helm repo add myRepo https://repo.example.com/ --force-update --username example_user --password-stdin
 `,
 	"info": `Adding repo myRepo https://repo.example.com/
 `,
@@ -1306,6 +1315,29 @@ func Test_GetPluginVersion(t *testing.T) {
 	}
 }
 
+func Test_GetPluginVersion_XDGPaths(t *testing.T) {
+	v3ExpectedVersion := "3.15.0"
+	v4ExpectedVersion := "4.7.4"
+	v3PluginDirPath := "../../test/plugins/secrets/3.15.0"
+	v4PluginDirPath := "../../test/plugins/secrets/4.7.4"
+
+	sep := string(os.PathListSeparator)
+	xdgPaths := "nonexistent/path" + sep + v3PluginDirPath + sep + "another/nonexistent"
+
+	pluginVersion, err := GetPluginVersion("secrets", xdgPaths)
+	require.NoError(t, err)
+	assert.Equal(t, v3ExpectedVersion, pluginVersion.String())
+
+	xdgPathsV4 := v4PluginDirPath + sep + "nonexistent/path"
+	pluginVersion, err = GetPluginVersion("secrets", xdgPathsV4)
+	require.NoError(t, err)
+	assert.Equal(t, v4ExpectedVersion, pluginVersion.String())
+
+	_, err = GetPluginVersion("nonexistent-plugin", xdgPaths)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plugin nonexistent-plugin not installed")
+}
+
 func Test_GetVersion(t *testing.T) {
 	helm2Runner := mockRunner{output: []byte("Client: v2.16.1+ge13bc94\n")}
 	helm, err := New("helm", HelmExecOptions{}, NewLogger(os.Stdout, "info"), "", "dev", &helm2Runner)
@@ -1371,6 +1403,30 @@ func Test_resolveOciChart(t *testing.T) {
 			chartPath:   "chart:5000/nginx",
 			ociChartURL: "oci://chart:5000/nginx",
 			ociChartTag: "",
+		},
+		{
+			name:        "digest only",
+			chartPath:   "ghcr.io/nginxinc/charts/nginx-ingress@sha256:87ad282a8e7cc31913ce0543de2933ddb3f3eba80d6e5285f33b62ed720fc085",
+			ociChartURL: "oci://ghcr.io/nginxinc/charts/nginx-ingress@sha256:87ad282a8e7cc31913ce0543de2933ddb3f3eba80d6e5285f33b62ed720fc085",
+			ociChartTag: "",
+		},
+		{
+			name:        "version and digest",
+			chartPath:   "ghcr.io/nginxinc/charts/nginx-ingress:2.0.0@sha256:87ad282a8e7cc31913ce0543de2933ddb3f3eba80d6e5285f33b62ed720fc085",
+			ociChartURL: "oci://ghcr.io/nginxinc/charts/nginx-ingress@sha256:87ad282a8e7cc31913ce0543de2933ddb3f3eba80d6e5285f33b62ed720fc085",
+			ociChartTag: "2.0.0",
+		},
+		{
+			name:        "port with digest",
+			chartPath:   "registry:5000/chart@sha256:abc123",
+			ociChartURL: "oci://registry:5000/chart@sha256:abc123",
+			ociChartTag: "",
+		},
+		{
+			name:        "port with version and digest",
+			chartPath:   "registry:5000/chart:1.0.0@sha256:abc123",
+			ociChartURL: "oci://registry:5000/chart@sha256:abc123",
+			ociChartTag: "1.0.0",
 		},
 	}
 	for i := range tests {

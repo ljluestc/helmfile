@@ -116,6 +116,7 @@ Iterate on the `helmfile.yaml` by referencing:
 * [Configuration](#configuration)
 * [CLI reference](#cli-reference).
 * [Helmfile Best Practices Guide](writing-helmfile.md)
+* [Values Merging and Data Flow](values-and-merging.md) - Understanding how Helmfile merges values
 
 ## Configuration
 
@@ -380,6 +381,11 @@ releases:
       - "version"
     # syncReleaseLabels is a list of labels to be added to the release when syncing.
     syncReleaseLabels: false
+    # unitTests is a list of test file or directory paths for helm-unittest integration.
+    # When specified, `helmfile unittest` will run `helm unittest` with the merged values and these test paths.
+    # Requires the helm-unittest plugin: https://github.com/helm-unittest/helm-unittest
+    unitTests:
+      - tests/vault
 
 
   # Local chart example
@@ -586,6 +592,9 @@ Helmfile uses some OS environment variables to override default behaviour:
 * `HELMFILE_CACHE_HOME` - specify directory to store cached files for remote operations
 * `HELMFILE_FILE_PATH` - specify the path to the helmfile.yaml file
 * `HELMFILE_INTERACTIVE` - enable interactive mode, expecting `true` lower case. The same as `--interactive` CLI flag
+* `HELMFILE_RENDER_YAML` - force helmfile.yaml to be rendered as a Go template regardless of file extension, expecting `true` lower case. Useful for migrating from v0 to v1 without renaming files to `.gotmpl`
+* `HELMFILE_AWS_SDK_LOG_LEVEL` - configure AWS SDK logging level for vals library. Valid values: `off` (default, secure, case-insensitive), `minimal`, `standard`, `verbose`, or custom comma-separated values like `request,response`. See issue #2270 for details
+* `HELMFILE_VALS_FAIL_ON_MISSING_KEY_IN_MAP` - enable strict mode for vals secret references. When set to `true` (or any value accepted by Go's `strconv.ParseBool` like `TRUE`, `1`), vals will fail when a referenced key does not exist in the secret map. Invalid values will cause an error when vals is initialized (when secret refs are first evaluated). Default is `false` (when unset or empty) for backward compatibility. See issue #1563 for details
 
 ## CLI Reference
 
@@ -618,6 +627,7 @@ Available Commands:
   sync         Sync releases defined in state file
   template     Template releases defined in state file
   test         Test charts from state file (helm test)
+  unittest     Unit test charts from state file using helm-unittest plugin
   version      Print the CLI version
   write-values Write values files for releases. Similar to `helmfile template`, write values files instead of manifests.
 
@@ -648,6 +658,7 @@ Flags:
       --state-values-file stringArray         specify state values in a YAML file. Used to override .Values within the helmfile template (not values template).
       --state-values-set stringArray          set state values on the command line (can specify multiple or separate values with commas: key1=val1,key2=val2). Used to override .Values within the helmfile template (not values template).
       --state-values-set-string stringArray   set state STRING values on the command line (can specify multiple or separate values with commas: key1=val1,key2=val2). Used to override .Values within the helmfile template (not values template).
+      --sequential-helmfiles                   Process helmfile.d files sequentially in alphabetical order instead of in parallel
       --strip-args-values-on-exit-error       Strip the potential secret values of the helm command args contained in a helmfile error message (default true)
   -v, --version                               version for helmfile
 
@@ -663,6 +674,33 @@ The `helmfile init` sub-command checks the dependencies required for helmfile op
 ### cache
 
 The `helmfile cache` sub-command is designed for cache management. Go-getter-backed remote file system are cached by `helmfile`. There is no TTL implemented, if you need to update the cached files or directories, you need to clean individually or run a full cleanup with `helmfile cache cleanup`
+
+#### OCI Chart Cache
+
+OCI charts are cached in the shared cache directory (`~/.cache/helmfile` by default, or `$HELMFILE_CACHE_HOME`). This cache is shared across all helmfile processes.
+
+**Cache Behavior:**
+
+- When a chart exists in the shared cache and is valid, it is reused without re-downloading
+- The `--skip-refresh` flag can be used to skip checking for updates to cached charts stored in process-specific temporary directories (it does not affect charts already present in the shared cache)
+- When running multiple helmfile processes in parallel (e.g., as an ArgoCD plugin), charts in the shared cache are not refreshed/deleted to prevent race conditions
+
+**Forcing a Cache Refresh:**
+
+To force a refresh of cached OCI charts, run:
+```bash
+helmfile cache cleanup
+```
+
+This will clear the shared cache, allowing the next helmfile command to re-download charts.
+
+#### cache info
+
+Display information about the cache directory.
+
+#### cache cleanup
+
+Remove all cached files from the cache directory.
 
 ### sync
 
@@ -758,6 +796,64 @@ Use `--cleanup` to delete pods upon completion.
 ### lint
 
 The `helmfile lint` sub-command runs a `helm lint` across all of the charts/releases defined in the manifest. Non local charts will be fetched into a temporary folder which will be deleted once the task is completed.
+
+### unittest
+
+The `helmfile unittest` sub-command runs `helm unittest` (from the [helm-unittest plugin](https://github.com/helm-unittest/helm-unittest)) on releases that have `unitTests` defined. It automatically generates the final merged values files for each release and passes them to `helm unittest`.
+
+This requires the `helm-unittest` plugin to be installed. You can install it with:
+
+```bash
+helm plugin install https://github.com/helm-unittest/helm-unittest
+```
+
+Releases without `unitTests` defined are skipped. Non-local charts will be fetched into a temporary folder which will be deleted once the task is completed.
+
+Example helmfile configuration:
+
+```yaml
+releases:
+  - name: my-app
+    chart: ./charts/my-app
+    values:
+      - values.yaml
+    unitTests:
+      - tests
+```
+
+The `unitTests` paths are relative to the chart directory and follow helm-unittest conventions.
+If a path does not contain glob characters, it is treated as a directory and `/*_test.yaml` is appended automatically.
+You can also specify explicit glob patterns (e.g., `tests/**/*_test.yaml`).
+
+Running `helmfile unittest` will:
+
+1. Merge all values files defined for the release
+2. Run `helm unittest ./charts/my-app --values <merged-values> --file tests/*_test.yaml`
+
+You can pass additional flags:
+
+```bash
+# Run with additional values
+helmfile unittest --values extra-values.yaml
+
+# Run with --set overrides
+helmfile unittest --set key=value
+
+# Target specific releases
+helmfile unittest --selector name=my-app
+
+# Fail fast on first test failure
+helmfile unittest --fail-fast
+
+# Enable colored output (Helm 3 only; ignored on Helm 4 due to flag parsing issues)
+helmfile unittest --color
+
+# Enable verbose plugin output
+helmfile unittest --debug-plugin
+
+# Pass extra arguments to helm unittest
+helmfile unittest --args "--strict"
+```
 
 ### fetch
 
@@ -1056,14 +1152,14 @@ Since Helmfile v0.164.0, HCL language is supported for environment values only.
 HCL values supports interpolations and sharing values across files
 
 * Only `.hcl` suffixed files will be interpreted as is
-* Helmfile supports 2 differents blocks: `values` and `locals`
+* Helmfile supports 2 different blocks: `values` and `locals`
 * `values` block is a shared block where all values are accessible everywhere in all loaded files
 * `locals` block can't reference external values apart from the ones in the block itself, and where its defined values are only accessible in its local file
 * Only values in `values` blocks are made available to the final root `.Values` (e.g : ` values { myvar = "var" }` is accessed through `{{ .Values.myvar }}`)
 * There can only be 1 `locals` block per file
 * Helmfile hcl `values` are referenced using the `hv` accessor.
 * Helmfile hcl `locals` are referenced using the `local` accessor.
-* Duplicated variables across .hcl `values` blocks are forbidden (An error will pop up specifying where are the duplicates)
+* When the same key is defined multiple times across imported `.hcl` files in `values` blocks, values from later files override those from earlier files (last file loaded wins). Map values are merged per key, while list values are replaced as a whole (i.e. not deep-merged). Mixed-types overrides (e.g. bool -> string) are supported (latest value/type wins).
 * All cty [standard library functions](`https://pkg.go.dev/github.com/zclconf/go-cty@v1.14.3/cty/function/stdlib`) are available and custom functions could be created in the future
 
 Consider the following example :
@@ -1212,13 +1308,21 @@ domain: "dev.example.com"
 # values2.hcl
 values {
   domain = "overdev.example.com"
-  willBeOverriden = "override_me"
+  env = "dev"
+  willBeOverridden = "override_me"
+}
+```
+
+```terraform
+# values3.hcl
+values {
+  env = "local"
 }
 ```
 
 ```yaml
 # secrets.yml (assuming this one has been encrypted)
-willBeOverriden: overrided
+willBeOverridden: overridden
 ```
 
 ```
@@ -1226,8 +1330,9 @@ willBeOverriden: overrided
 environments:
   default:
     values:
-    - value1.yaml
-    - value2.hcl
+    - values1.yaml
+    - values2.hcl
+    - values3.hcl
     secrets:
     - secrets.yml
 ---
@@ -1236,7 +1341,8 @@ releases:
   [...]
   values:
     domain: "{{ .Values.domain }}" # == "overdev.example.com"
-    willBeOverriden: "{{ .Values.willBeOverriden }}" # == "overrided"
+    env: "{{ .Values.env }}" # == "local"
+    willBeOverridden: "{{ .Values.willBeOverridden }}" # == "overridden"
 ```
 ## DAG-aware installation/deletion ordering with `needs`
 
@@ -1337,12 +1443,21 @@ And there are two ways to organize your files.
 The default helmfile directory is `helmfile.d`, that is,
 in case helmfile is unable to locate `helmfile.yaml`, it tries to locate `helmfile.d/*.yaml`.
 
-All the yaml files under the specified directory are processed in the alphabetical order. For example, you can use a `<two digit number>-<microservice>.yaml` naming convention to control the sync order.
+By default, multiple files in `helmfile.d` are processed in **parallel** for better performance. If you need files to be processed **sequentially in alphabetical order** (e.g., for dependency ordering where databases must be deployed before applications), use the `--sequential-helmfiles` flag.
+
+For example, you can use a `<two digit number>-<microservice>.yaml` naming convention to control the sync order when using `--sequential-helmfiles`:
 
 * `helmfile.d`/
   * `00-database.yaml`
-  * `00-backend.yaml`
-  * `01-frontend.yaml`
+  * `01-backend.yaml`
+  * `02-frontend.yaml`
+
+```bash
+# Process files sequentially in alphabetical order
+helmfile --sequential-helmfiles sync
+```
+
+> **Note:** When processing multiple helmfile.d files, both parallel and sequential modes resolve paths without changing the process working directory, so relative environment variables like `KUBECONFIG` work correctly.
 
 ### Glob patterns
 
@@ -1475,7 +1590,7 @@ Hooks associated to `presync` events are triggered before each release is synced
 This is the ideal event to execute any commands that may mutate the cluster state as it will not be run for read-only operations like `lint`, `diff` or `template`.
 
 `preapply` hooks are triggered before a release is uninstalled, installed, or upgraded as part of `helmfile apply`.
-This is the ideal event to hook into when you are going to use `helmfile apply` for every kind of change and you want the hook to be triggered regardless of whether the releases have changed or not. Be sure to make each `preapply` hook command idempotent. Otherwise, rerunning helmfile-apply on a transient failure may end up either breaking your cluster, or the hook that runs for the second time will never succeed.
+This is the ideal event to hook into when you are going to use `helmfile apply` for every kind of change. Note that preapply hooks will only run if at least one release has changes to apply. Be sure to make each `preapply` hook command idempotent. Otherwise, rerunning `helmfile apply` on a transient failure may end up either breaking your cluster, or the hook that runs for the second time will never succeed.
 
 `preuninstall` hooks are triggered immediately before a release is uninstalled as part of `helmfile apply`, `helmfile sync`, `helmfile delete`, and `helmfile destroy`.
 
@@ -1858,6 +1973,14 @@ repositories:
 export MY_OCI_REGISTRY_USERNAME=spongebob
 export MY_OCI_REGISTRY_PASSWORD=squarepants
 ```
+
+### OCI Chart Caching
+
+OCI charts are automatically cached in the shared cache directory (`~/.cache/helmfile` by default, or the directory specified by `HELMFILE_CACHE_HOME`). This improves performance by avoiding redundant downloads.
+
+**Multi-Process Safety:** When running multiple helmfile processes in parallel (e.g., as an ArgoCD plugin), charts in the shared cache are not deleted or refreshed to prevent race conditions where one process might delete a chart that another is using. To force a cache refresh, run `helmfile cache cleanup` first.
+
+See the [cache](#cache) section for more details on cache management.
 
 ## Attribution
 

@@ -1,6 +1,4 @@
-processing file "helmfile.yaml" in directory "."
-changing working directory to "/path/to"
-merged environment: &{default  map[] map[]}
+merged environment: &{default  map[] map[] map[]}
 2 release(s) found in helmfile.yaml
 
 Affected releases are:
@@ -34,4 +32,3 @@ DELETED RELEASES:
 NAME   NAMESPACE   DURATION
 foo                      0s
 
-changing working directory back to "/path/to"

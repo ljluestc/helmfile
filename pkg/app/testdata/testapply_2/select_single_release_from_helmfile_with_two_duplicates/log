@@ -1,6 +1,4 @@
-processing file "helmfile.yaml" in directory "."
-changing working directory to "/path/to"
-merged environment: &{default  map[] map[]}
+merged environment: &{default  map[] map[] map[]}
 1 release(s) matching name=foo found in helmfile.yaml
 
 Affected releases are:
@@ -21,4 +19,3 @@ UPDATED RELEASES:
 NAME   NAMESPACE   CHART           VERSION   DURATION
 foo    default     incubator/raw   3.1.0           0s
 
-changing working directory back to "/path/to"

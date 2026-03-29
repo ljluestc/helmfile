@@ -27,7 +27,7 @@ export HELM_DATA_HOME="${helm_dir}/data"
 export HELM_HOME="${HELM_DATA_HOME}"
 export HELM_PLUGINS="${HELM_DATA_HOME}/plugins"
 export HELM_CONFIG_HOME="${helm_dir}/config"
-HELM_DIFF_VERSION="${HELM_DIFF_VERSION:-3.14.1}"
+HELM_DIFF_VERSION="${HELM_DIFF_VERSION:-3.15.3}"
 HELM_GIT_VERSION="${HELM_GIT_VERSION:-1.4.1}"
 HELM_SECRETS_VERSION="${HELM_SECRETS_VERSION:-4.7.4}"
 export GNUPGHOME="${PWD}/${dir}/.gnupg"
@@ -36,7 +36,12 @@ export SOPS_PGP_FP="B2D6D7BBEC03B2E66571C8C00AD18E16CFDEF700"
 # FUNCTIONS ----------------------------------------------------------------------------------------------------------
 
 function wait_deploy_ready() {
-    ${kubectl} rollout status deployment ${1}
+    ${kubectl} rollout status deployment ${1} --timeout=300s || {
+        info "Deployment ${1} rollout timed out, checking pod status:"
+        ${kubectl} get pods -o wide --namespace=${test_ns} 2>/dev/null || true
+        ${kubectl} describe deployment ${1} --namespace=${test_ns} 2>/dev/null | tail -20 || true
+        fail "Deployment ${1} failed to become ready within 300s"
+    }
     while [ "$(${kubectl} get deploy ${1} -o=jsonpath='{.status.readyReplicas}')" == "0" ]; do
         info "Waiting for deployment ${1} to be ready"
         sleep 1
@@ -91,6 +96,7 @@ ${kubectl} create namespace ${test_ns} || fail "Could not create namespace ${tes
 
 # TEST CASES----------------------------------------------------------------------------------------------------------
 
+. ${dir}/test-cases/chart-deps-condition.sh
 . ${dir}/test-cases/fetch-forl-local-chart.sh
 . ${dir}/test-cases/suppress-output-line-regex.sh
 . ${dir}/test-cases/chartify-jsonPatches-and-strategicMergePatches.sh
@@ -102,6 +108,7 @@ ${kubectl} create namespace ${test_ns} || fail "Could not create namespace ${tes
 . ${dir}/test-cases/skip-diff-output.sh
 . ${dir}/test-cases/v1-subhelmfile-multi-bases-with-array-values.sh
 . ${dir}/test-cases/kustomized-fetch.sh
+. ${dir}/test-cases/issue-2503-kustomize-fetch.sh
 . ${dir}/test-cases/regression.sh
 . ${dir}/test-cases/secretssops.sh
 . ${dir}/test-cases/yaml-overwrite.sh
@@ -115,10 +122,23 @@ ${kubectl} create namespace ${test_ns} || fail "Could not create namespace ${tes
 . ${dir}/test-cases/issue-1893.sh
 . ${dir}/test-cases/state-values-set-cli-args-in-environments.sh
 . ${dir}/test-cases/issue-2281-array-merge.sh
+. ${dir}/test-cases/issue-2353-layer-array-replace.sh
+. ${dir}/test-cases/issue-2451-nested-helmfile-array-replace.sh
 . ${dir}/test-cases/issue-2247.sh
+. ${dir}/test-cases/issue-2097.sh
 . ${dir}/test-cases/issue-2291.sh
 . ${dir}/test-cases/oci-parallel-pull.sh
 . ${dir}/test-cases/issue-2297-local-chart-transformers.sh
+. ${dir}/test-cases/issue-2309-kube-context-template.sh
+. ${dir}/test-cases/issue-2355.sh
+. ${dir}/test-cases/issue-2103.sh
+. ${dir}/test-cases/unittest.sh
+. ${dir}/test-cases/issue-2409-sequential-kubecontext.sh
+. ${dir}/test-cases/issue-2269.sh
+. ${dir}/test-cases/issue-2418.sh
+. ${dir}/test-cases/issue-2424-sequential-values-paths.sh
+. ${dir}/test-cases/issue-2431.sh
+. ${dir}/test-cases/kubedog-tracking.sh
 
 # ALL DONE -----------------------------------------------------------------------------------------------------------
 

@@ -13,6 +13,7 @@ type ConfigProvider interface {
 	HelmOCIPlainHTTP() bool
 	SkipDeps() bool
 	SkipRefresh() bool
+	SequentialHelmfiles() bool
 
 	FileOrDir() string
 	KubeContext() string
@@ -58,6 +59,7 @@ type ApplyConfigProvider interface {
 	Wait() bool
 	WaitRetries() int
 	WaitForJobs() bool
+	Timeout() int
 
 	IncludeTests() bool
 
@@ -86,6 +88,12 @@ type ApplyConfigProvider interface {
 
 	DAGConfig
 
+	TrackMode() string
+	TrackTimeout() int
+	TrackLogs() bool
+
+	Description() string
+
 	concurrencyConfig
 	interactive
 	loggingConfig
@@ -109,6 +117,7 @@ type SyncConfigProvider interface {
 	Wait() bool
 	WaitRetries() int
 	WaitForJobs() bool
+	Timeout() int
 	SyncArgs() string
 
 	Validate() bool
@@ -118,6 +127,11 @@ type SyncConfigProvider interface {
 	IncludeTransitiveNeeds() bool
 
 	SyncReleaseLabels() bool
+	TrackMode() string
+	TrackTimeout() int
+	TrackLogs() bool
+
+	Description() string
 
 	DAGConfig
 
@@ -197,6 +211,23 @@ type LintConfigProvider interface {
 
 	Values() []string
 	Set() []string
+	SkipDeps() bool
+	SkipRefresh() bool
+	SkipCleanup() bool
+
+	DAGConfig
+
+	concurrencyConfig
+}
+
+type UnittestConfigProvider interface {
+	Args() string
+
+	Values() []string
+	Set() []string
+	FailFast() bool
+	Color() bool
+	DebugPlugin() bool
 	SkipDeps() bool
 	SkipRefresh() bool
 	SkipCleanup() bool

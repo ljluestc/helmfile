@@ -1,0 +1,3 @@
+merged environment: &{default  map[] map[] map[]}
+0 release(s) matching app=test_non_existent found in helmfile.yaml
+

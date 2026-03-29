@@ -261,10 +261,12 @@ func TestHelmState_flagsForUpgrade(t *testing.T) {
 			},
 		},
 		{
-			name: "force",
+			name: "force-helm3",
 			defaults: HelmSpec{
-				Force: false,
+				Force:           false,
+				CreateNamespace: &disable,
 			},
+			version: semver.MustParse("3.10.0"),
 			release: &ReleaseSpec{
 				Chart:     "test/chart",
 				Version:   "0.1",
@@ -279,10 +281,32 @@ func TestHelmState_flagsForUpgrade(t *testing.T) {
 			},
 		},
 		{
-			name: "force-from-default",
+			name: "force-helm4",
 			defaults: HelmSpec{
-				Force: true,
+				Force:           false,
+				CreateNamespace: &disable,
 			},
+			version: semver.MustParse("4.0.0"),
+			release: &ReleaseSpec{
+				Chart:     "test/chart",
+				Version:   "0.1",
+				Force:     &enable,
+				Name:      "test-charts",
+				Namespace: "test-namespace",
+			},
+			want: []string{
+				"--version", "0.1",
+				"--force-replace",
+				"--namespace", "test-namespace",
+			},
+		},
+		{
+			name: "force-from-default-helm3",
+			defaults: HelmSpec{
+				Force:           true,
+				CreateNamespace: &disable,
+			},
+			version: semver.MustParse("3.10.0"),
 			release: &ReleaseSpec{
 				Chart:     "test/chart",
 				Version:   "0.1",
@@ -294,6 +318,148 @@ func TestHelmState_flagsForUpgrade(t *testing.T) {
 				"--version", "0.1",
 				"--namespace", "test-namespace",
 			},
+		},
+		{
+			name: "force-from-default-helm4",
+			defaults: HelmSpec{
+				Force:           true,
+				CreateNamespace: &disable,
+			},
+			version: semver.MustParse("4.0.0"),
+			release: &ReleaseSpec{
+				Chart:     "test/chart",
+				Version:   "0.1",
+				Force:     &disable,
+				Name:      "test-charts",
+				Namespace: "test-namespace",
+			},
+			want: []string{
+				"--version", "0.1",
+				"--namespace", "test-namespace",
+			},
+		},
+		{
+			name: "force-from-default-nil-force-helm3",
+			defaults: HelmSpec{
+				Force:           true,
+				CreateNamespace: &disable,
+			},
+			version: semver.MustParse("3.10.0"),
+			release: &ReleaseSpec{
+				Chart:     "test/chart",
+				Version:   "0.1",
+				Name:      "test-charts",
+				Namespace: "test-namespace",
+			},
+			want: []string{
+				"--version", "0.1",
+				"--force",
+				"--namespace", "test-namespace",
+			},
+		},
+		{
+			name: "force-from-default-nil-force-helm4",
+			defaults: HelmSpec{
+				Force:           true,
+				CreateNamespace: &disable,
+			},
+			version: semver.MustParse("4.0.0"),
+			release: &ReleaseSpec{
+				Chart:     "test/chart",
+				Version:   "0.1",
+				Name:      "test-charts",
+				Namespace: "test-namespace",
+			},
+			want: []string{
+				"--version", "0.1",
+				"--force-replace",
+				"--namespace", "test-namespace",
+			},
+		},
+		{
+			name: "force-conflicts-helm4",
+			defaults: HelmSpec{
+				ForceConflicts:  false,
+				CreateNamespace: &disable,
+			},
+			version: semver.MustParse("4.0.0"),
+			release: &ReleaseSpec{
+				Chart:          "test/chart",
+				Version:        "0.1",
+				ForceConflicts: &enable,
+				Name:           "test-charts",
+				Namespace:      "test-namespace",
+			},
+			want: []string{
+				"--version", "0.1",
+				"--force-conflicts",
+				"--namespace", "test-namespace",
+			},
+		},
+		{
+			name: "force-conflicts-from-default-helm4",
+			defaults: HelmSpec{
+				ForceConflicts:  true,
+				CreateNamespace: &disable,
+			},
+			version: semver.MustParse("4.0.0"),
+			release: &ReleaseSpec{
+				Chart:     "test/chart",
+				Version:   "0.1",
+				Name:      "test-charts",
+				Namespace: "test-namespace",
+			},
+			want: []string{
+				"--version", "0.1",
+				"--force-conflicts",
+				"--namespace", "test-namespace",
+			},
+		},
+		{
+			name: "force-conflicts-helm3-error",
+			defaults: HelmSpec{
+				CreateNamespace: &disable,
+			},
+			version: semver.MustParse("3.10.0"),
+			release: &ReleaseSpec{
+				Chart:          "test/chart",
+				Version:        "0.1",
+				ForceConflicts: &enable,
+				Name:           "test-charts",
+				Namespace:      "test-namespace",
+			},
+			wantErr: "forceConflicts requires Helm 4 or greater (set via releases[].forceConflicts or helmDefaults.forceConflicts)",
+		},
+		{
+			name: "force-conflicts-from-default-helm3-error",
+			defaults: HelmSpec{
+				ForceConflicts:  true,
+				CreateNamespace: &disable,
+			},
+			version: semver.MustParse("3.10.0"),
+			release: &ReleaseSpec{
+				Chart:     "test/chart",
+				Version:   "0.1",
+				Name:      "test-charts",
+				Namespace: "test-namespace",
+			},
+			wantErr: "forceConflicts requires Helm 4 or greater (set via releases[].forceConflicts or helmDefaults.forceConflicts)",
+		},
+		{
+			name: "force-and-force-conflicts-mutually-exclusive-helm4",
+			defaults: HelmSpec{
+				CreateNamespace: &disable,
+			},
+			version: semver.MustParse("4.0.0"),
+			release: &ReleaseSpec{
+				Chart:          "test/chart",
+				Version:        "0.1",
+				Force:          &enable,
+				ForceConflicts: &enable,
+				Name:           "test-charts",
+				Namespace:      "test-namespace",
+			},
+			wantErr: "force and forceConflicts are mutually exclusive (check both releases[].force/forceConflicts and helmDefaults.force/forceConflicts)",
 		},
 		{
 			name: "recreate-pods",
@@ -742,6 +908,188 @@ func TestHelmState_flagsForUpgrade(t *testing.T) {
 				"--namespace", "test-namespace",
 			},
 		},
+		{
+			name: "description-from-release",
+			defaults: HelmSpec{
+				Verify:          false,
+				CreateNamespace: &disable,
+			},
+			version: semver.MustParse("3.10.0"),
+			release: &ReleaseSpec{
+				Chart:       "test/chart",
+				Version:     "0.1",
+				Name:        "test-charts",
+				Namespace:   "test-namespace",
+				Description: "Release description from config",
+			},
+			syncOpts: &SyncOpts{},
+			want: []string{
+				"--version", "0.1",
+				"--description", "Release description from config",
+				"--namespace", "test-namespace",
+			},
+		},
+		{
+			name: "description-from-cli",
+			defaults: HelmSpec{
+				Verify:          false,
+				CreateNamespace: &disable,
+			},
+			version: semver.MustParse("3.10.0"),
+			release: &ReleaseSpec{
+				Chart:     "test/chart",
+				Version:   "0.1",
+				Name:      "test-charts",
+				Namespace: "test-namespace",
+			},
+			syncOpts: &SyncOpts{
+				Description: "CLI description from --description flag",
+			},
+			want: []string{
+				"--version", "0.1",
+				"--description", "CLI description from --description flag",
+				"--namespace", "test-namespace",
+			},
+		},
+		{
+			name: "description-cli-overrides-release",
+			defaults: HelmSpec{
+				Verify:          false,
+				CreateNamespace: &disable,
+			},
+			version: semver.MustParse("3.10.0"),
+			release: &ReleaseSpec{
+				Chart:       "test/chart",
+				Version:     "0.1",
+				Name:        "test-charts",
+				Namespace:   "test-namespace",
+				Description: "Release description from config",
+			},
+			syncOpts: &SyncOpts{
+				Description: "CLI description overrides config",
+			},
+			want: []string{
+				"--version", "0.1",
+				"--description", "CLI description overrides config",
+				"--namespace", "test-namespace",
+			},
+		},
+		{
+			name: "description-empty-string-not-passed",
+			defaults: HelmSpec{
+				Verify:          false,
+				CreateNamespace: &disable,
+			},
+			version: semver.MustParse("3.10.0"),
+			release: &ReleaseSpec{
+				Chart:       "test/chart",
+				Version:     "0.1",
+				Name:        "test-charts",
+				Namespace:   "test-namespace",
+				Description: "",
+			},
+			syncOpts: &SyncOpts{
+				Description: "",
+			},
+			want: []string{
+				"--version", "0.1",
+				"--namespace", "test-namespace",
+			},
+		},
+		{
+			name: "description-from-config-unsupported-version-3.1.0",
+			defaults: HelmSpec{
+				Verify:          false,
+				CreateNamespace: &disable,
+			},
+			version: semver.MustParse("3.1.0"),
+			release: &ReleaseSpec{
+				Chart:       "test/chart",
+				Version:     "0.1",
+				Name:        "test-charts",
+				Namespace:   "test-namespace",
+				Description: "Release description from config",
+			},
+			syncOpts: &SyncOpts{},
+			wantErr:  "releases[].description requires Helm 3.3.0 or greater",
+		},
+		{
+			name: "description-from-config-unsupported-version-3.2.4",
+			defaults: HelmSpec{
+				Verify:          false,
+				CreateNamespace: &disable,
+			},
+			version: semver.MustParse("3.2.4"),
+			release: &ReleaseSpec{
+				Chart:       "test/chart",
+				Version:     "0.1",
+				Name:        "test-charts",
+				Namespace:   "test-namespace",
+				Description: "Release description from config",
+			},
+			syncOpts: &SyncOpts{},
+			wantErr:  "releases[].description requires Helm 3.3.0 or greater",
+		},
+		{
+			name: "description-from-cli-unsupported-version",
+			defaults: HelmSpec{
+				Verify:          false,
+				CreateNamespace: &disable,
+			},
+			version: semver.MustParse("3.2.0"),
+			release: &ReleaseSpec{
+				Chart:     "test/chart",
+				Version:   "0.1",
+				Name:      "test-charts",
+				Namespace: "test-namespace",
+			},
+			syncOpts: &SyncOpts{
+				Description: "CLI description from --description flag",
+			},
+			wantErr: "--description flag requires Helm 3.3.0 or greater",
+		},
+		{
+			name: "description-empty-on-old-version",
+			defaults: HelmSpec{
+				Verify:          false,
+				CreateNamespace: &disable,
+			},
+			version: semver.MustParse("3.1.0"),
+			release: &ReleaseSpec{
+				Chart:     "test/chart",
+				Version:   "0.1",
+				Name:      "test-charts",
+				Namespace: "test-namespace",
+				// No description set
+			},
+			syncOpts: &SyncOpts{},
+			want: []string{
+				"--version", "0.1",
+				"--namespace", "test-namespace",
+				// No --description flag should appear
+			},
+		},
+		{
+			name: "description-from-config-supported-version-3.3.0",
+			defaults: HelmSpec{
+				Verify:          false,
+				CreateNamespace: &disable,
+			},
+			version: semver.MustParse("3.3.0"),
+			release: &ReleaseSpec{
+				Chart:       "test/chart",
+				Version:     "0.1",
+				Name:        "test-charts",
+				Namespace:   "test-namespace",
+				Description: "Release description from config",
+			},
+			syncOpts: &SyncOpts{},
+			want: []string{
+				"--version", "0.1",
+				"--description", "Release description from config",
+				"--namespace", "test-namespace",
+			},
+		},
 	}
 	for i := range tests {
 		tt := tests[i]
@@ -784,6 +1132,8 @@ func TestHelmState_flagsForTemplate(t *testing.T) {
 		defaults     HelmSpec
 		release      *ReleaseSpec
 		templateOpts TemplateOpts
+		environments map[string]EnvironmentSpec
+		envName      string
 		want         []string
 		wantErr      string
 	}{
@@ -903,15 +1253,114 @@ func TestHelmState_flagsForTemplate(t *testing.T) {
 				"--namespace", "test-namespace",
 			},
 		},
+		// Issue #2309: kube-context tests
+		{
+			name: "kube-context-from-release",
+			defaults: HelmSpec{
+				Verify:          false,
+				CreateNamespace: &enable,
+			},
+			version: semver.MustParse("3.10.0"),
+			release: &ReleaseSpec{
+				Chart:       "test/chart",
+				Version:     "0.1",
+				Verify:      &disable,
+				Name:        "test-charts",
+				Namespace:   "test-namespace",
+				KubeContext: "release-context",
+			},
+			want: []string{
+				"--version", "0.1",
+				"--kube-context", "release-context",
+				"--namespace", "test-namespace",
+			},
+		},
+		{
+			name: "kube-context-from-helmdefaults",
+			defaults: HelmSpec{
+				Verify:          false,
+				CreateNamespace: &enable,
+				KubeContext:     "default-context",
+			},
+			version: semver.MustParse("3.10.0"),
+			release: &ReleaseSpec{
+				Chart:     "test/chart",
+				Version:   "0.1",
+				Verify:    &disable,
+				Name:      "test-charts",
+				Namespace: "test-namespace",
+			},
+			want: []string{
+				"--version", "0.1",
+				"--kube-context", "default-context",
+				"--namespace", "test-namespace",
+			},
+		},
+		{
+			name: "kube-context-release-overrides-helmdefaults",
+			defaults: HelmSpec{
+				Verify:          false,
+				CreateNamespace: &enable,
+				KubeContext:     "default-context",
+			},
+			version: semver.MustParse("3.10.0"),
+			release: &ReleaseSpec{
+				Chart:       "test/chart",
+				Version:     "0.1",
+				Verify:      &disable,
+				Name:        "test-charts",
+				Namespace:   "test-namespace",
+				KubeContext: "release-context",
+			},
+			want: []string{
+				"--version", "0.1",
+				"--kube-context", "release-context",
+				"--namespace", "test-namespace",
+			},
+		},
+		{
+			name: "kube-context-from-environment",
+			defaults: HelmSpec{
+				Verify:          false,
+				CreateNamespace: &enable,
+			},
+			version: semver.MustParse("3.10.0"),
+			release: &ReleaseSpec{
+				Chart:     "test/chart",
+				Version:   "0.1",
+				Verify:    &disable,
+				Name:      "test-charts",
+				Namespace: "test-namespace",
+			},
+			environments: map[string]EnvironmentSpec{
+				"production": {KubeContext: "env-context"},
+			},
+			envName: "production",
+			want: []string{
+				"--version", "0.1",
+				"--kube-context", "env-context",
+				"--namespace", "test-namespace",
+			},
+		},
 	}
 	for i := range tests {
 		tt := tests[i]
 		t.Run(tt.name, func(t *testing.T) {
+			envName := tt.envName
+			if envName == "" {
+				envName = "default"
+			}
+			environments := tt.environments
+			if environments == nil {
+				environments = make(map[string]EnvironmentSpec)
+			}
 			state := &HelmState{
 				basePath: "./",
 				ReleaseSetSpec: ReleaseSetSpec{
 					Releases:     []ReleaseSpec{*tt.release},
 					HelmDefaults: tt.defaults,
+					Environments: environments,
+					Env:          environment.Environment{Name: envName},
 				},
 				valsRuntime: valsRuntime,
 			}
@@ -2281,10 +2730,10 @@ generated: 2019-05-16T15:42:45.50486+09:00
 	}
 
 	logger := helmexec.NewLogger(io.Discard, "debug")
-	basePath := "/src"
+	basePath := filepath.ToSlash(t.TempDir())
 	state := &HelmState{
 		basePath: basePath,
-		FilePath: "/src/helmfile.yaml",
+		FilePath: filepath.Join(basePath, "helmfile.yaml"),
 		ReleaseSetSpec: ReleaseSetSpec{
 			Releases: []ReleaseSpec{
 				{
@@ -2317,8 +2766,8 @@ generated: 2019-05-16T15:42:45.50486+09:00
 	}
 
 	fs := testhelper.NewTestFs(map[string]string{
-		"/example/Chart.yaml":     `foo: FOO`,
-		"/src/example/Chart.yaml": `foo: FOO`,
+		"/example/Chart.yaml":                         `foo: FOO`,
+		filepath.Join(basePath, "example/Chart.yaml"): `foo: FOO`,
 	})
 	fs.Cwd = basePath
 	state = injectFs(state, fs)
@@ -2381,7 +2830,7 @@ func TestHelmState_ResolveDeps_NoLockFile(t *testing.T) {
 		logger: logger,
 		fs: &filesystem.FileSystem{
 			ReadFile: func(f string) ([]byte, error) {
-				if f != "helmfile.lock" {
+				if f != filepath.Join("/src", "helmfile.lock") {
 					return nil, fmt.Errorf("stub: unexpected file: %s", f)
 				}
 				return nil, os.ErrNotExist
@@ -2432,7 +2881,7 @@ func TestHelmState_ResolveDeps_NoLockFile_WithCustomLockFile(t *testing.T) {
 		logger: logger,
 		fs: &filesystem.FileSystem{
 			ReadFile: func(f string) ([]byte, error) {
-				if f != "custom-lock-file" {
+				if f != filepath.Join("/src", "custom-lock-file") {
 					return nil, fmt.Errorf("stub: unexpected file: %s", f)
 				}
 				return nil, os.ErrNotExist
@@ -3600,6 +4049,212 @@ func TestGetOCIQualifiedChartName(t *testing.T) {
 				{"registry/chart-path/chart-name", "chart-name", ""},
 			},
 		},
+		// Digest in version field
+		{
+			state: HelmState{
+				ReleaseSetSpec: ReleaseSetSpec{
+					Repositories: []RepositorySpec{},
+					Releases: []ReleaseSpec{
+						{
+							Chart:   "oci://registry/chart-path/chart-name",
+							Version: "2.0.0@sha256:abc123",
+						},
+					},
+				},
+			},
+			helmVersion: "3.13.3",
+			expected: []struct {
+				qualifiedChartName string
+				chartName          string
+				chartVersion       string
+			}{
+				{"registry/chart-path/chart-name@sha256:abc123", "chart-name", "2.0.0"},
+			},
+		},
+		// Digest-only in version field
+		{
+			state: HelmState{
+				ReleaseSetSpec: ReleaseSetSpec{
+					Repositories: []RepositorySpec{},
+					Releases: []ReleaseSpec{
+						{
+							Chart:   "oci://registry/chart-path/chart-name",
+							Version: "@sha256:abc123",
+						},
+					},
+				},
+			},
+			helmVersion: "3.13.3",
+			expected: []struct {
+				qualifiedChartName string
+				chartName          string
+				chartVersion       string
+			}{
+				{"registry/chart-path/chart-name@sha256:abc123", "chart-name", ""},
+			},
+		},
+		// Version tag in URL
+		{
+			state: HelmState{
+				ReleaseSetSpec: ReleaseSetSpec{
+					Repositories: []RepositorySpec{},
+					Releases: []ReleaseSpec{
+						{
+							Chart: "oci://registry/chart-path/chart-name:2.0.0",
+						},
+					},
+				},
+			},
+			helmVersion: "3.13.3",
+			expected: []struct {
+				qualifiedChartName string
+				chartName          string
+				chartVersion       string
+			}{
+				{"registry/chart-path/chart-name", "chart-name", "2.0.0"},
+			},
+		},
+		// Digest in URL
+		{
+			state: HelmState{
+				ReleaseSetSpec: ReleaseSetSpec{
+					Repositories: []RepositorySpec{},
+					Releases: []ReleaseSpec{
+						{
+							Chart: "oci://registry/chart-path/chart-name@sha256:abc123",
+						},
+					},
+				},
+			},
+			helmVersion: "3.13.3",
+			expected: []struct {
+				qualifiedChartName string
+				chartName          string
+				chartVersion       string
+			}{
+				{"registry/chart-path/chart-name@sha256:abc123", "chart-name", ""},
+			},
+		},
+		// Version + digest in URL
+		{
+			state: HelmState{
+				ReleaseSetSpec: ReleaseSetSpec{
+					Repositories: []RepositorySpec{},
+					Releases: []ReleaseSpec{
+						{
+							Chart: "oci://registry/chart-path/chart-name:2.0.0@sha256:abc123",
+						},
+					},
+				},
+			},
+			helmVersion: "3.13.3",
+			expected: []struct {
+				qualifiedChartName string
+				chartName          string
+				chartVersion       string
+			}{
+				{"registry/chart-path/chart-name@sha256:abc123", "chart-name", "2.0.0"},
+			},
+		},
+		// Port with digest in URL
+		{
+			state: HelmState{
+				ReleaseSetSpec: ReleaseSetSpec{
+					Repositories: []RepositorySpec{},
+					Releases: []ReleaseSpec{
+						{
+							Chart: "oci://registry:5000/chart-path/chart-name@sha256:abc123",
+						},
+					},
+				},
+			},
+			helmVersion: "3.13.3",
+			expected: []struct {
+				qualifiedChartName string
+				chartName          string
+				chartVersion       string
+			}{
+				{"registry:5000/chart-path/chart-name@sha256:abc123", "chart-name", ""},
+			},
+		},
+		// Digest in URL + version field
+		{
+			state: HelmState{
+				ReleaseSetSpec: ReleaseSetSpec{
+					Repositories: []RepositorySpec{},
+					Releases: []ReleaseSpec{
+						{
+							Chart:   "oci://registry/chart-path/chart-name@sha256:abc123",
+							Version: "2.0.0",
+						},
+					},
+				},
+			},
+			helmVersion: "3.13.3",
+			expected: []struct {
+				qualifiedChartName string
+				chartName          string
+				chartVersion       string
+			}{
+				{"registry/chart-path/chart-name@sha256:abc123", "chart-name", "2.0.0"},
+			},
+		},
+		// Repo-aliased OCI chart with digest in version
+		{
+			state: HelmState{
+				ReleaseSetSpec: ReleaseSetSpec{
+					Repositories: []RepositorySpec{
+						{
+							Name: "oci-repo",
+							URL:  "registry/chart-path",
+							OCI:  true,
+						},
+					},
+					Releases: []ReleaseSpec{
+						{
+							Chart:   "oci-repo/chart-name",
+							Version: "2.0.0@sha256:abc123",
+						},
+					},
+				},
+			},
+			helmVersion: "3.13.3",
+			expected: []struct {
+				qualifiedChartName string
+				chartName          string
+				chartVersion       string
+			}{
+				{"registry/chart-path/chart-name@sha256:abc123", "chart-name", "2.0.0"},
+			},
+		},
+		// Repo-aliased OCI chart with digest-only version
+		{
+			state: HelmState{
+				ReleaseSetSpec: ReleaseSetSpec{
+					Repositories: []RepositorySpec{
+						{
+							Name: "oci-repo",
+							URL:  "registry/chart-path",
+							OCI:  true,
+						},
+					},
+					Releases: []ReleaseSpec{
+						{
+							Chart:   "oci-repo/chart-name",
+							Version: "@sha256:abc123",
+						},
+					},
+				},
+			},
+			helmVersion: "3.13.3",
+			expected: []struct {
+				qualifiedChartName string
+				chartName          string
+				chartVersion       string
+			}{
+				{"registry/chart-path/chart-name@sha256:abc123", "chart-name", ""},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -3720,10 +4375,40 @@ func TestGenerateChartPath(t *testing.T) {
 			outputDirTemplate: "{{ .OutputDir }",
 			wantErr:           true,
 		},
+		{
+			testName:          "PathGeneratedWithGivenOutputDirTemplateWithEnvironmentName",
+			chartName:         "chart-name",
+			release:           &ReleaseSpec{Name: "release-name"},
+			outputDir:         "/output-dir",
+			outputDirTemplate: "{{ .OutputDir }}/{{ .Environment.Name }}",
+			wantErr:           false,
+			expected:          "/output-dir/test-env",
+		},
+		{
+			testName:          "PathGeneratedWithGivenOutputDirTemplateWithEnvironmentValues",
+			chartName:         "chart-name",
+			release:           &ReleaseSpec{Name: "release-name"},
+			outputDir:         "/output-dir",
+			outputDirTemplate: "{{ .OutputDir }}/{{ .Environment.Values.cluster.name }}",
+			wantErr:           false,
+			expected:          "/output-dir/my-test-cluster",
+		},
+	}
+	st := &HelmState{
+		ReleaseSetSpec: ReleaseSetSpec{
+			Env: environment.Environment{
+				Name: "test-env",
+				Values: map[string]any{
+					"cluster": map[string]any{
+						"name": "my-test-cluster",
+					},
+				},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.testName, func(t *testing.T) {
-			got, err := generateChartPath(tt.chartName, tt.outputDir, tt.release, tt.outputDirTemplate)
+			got, err := st.generateChartPath(tt.chartName, tt.outputDir, tt.release, tt.outputDirTemplate)
 
 			if tt.wantErr {
 				require.Errorf(t, err, "GenerateChartPath() error \"%v\", want error", err)
@@ -3731,6 +4416,68 @@ func TestGenerateChartPath(t *testing.T) {
 				require.NoError(t, err, "GenerateChartPath() error \"%v\", want no error", err)
 			}
 			require.Equalf(t, tt.expected, got, "GenerateChartPath() got \"%v\", want \"%v\"", got, tt.expected)
+		})
+	}
+}
+
+func TestGenerateOutputDir(t *testing.T) {
+	tests := []struct {
+		testName          string
+		release           *ReleaseSpec
+		outputDir         string
+		outputDirTemplate string
+		wantErr           bool
+		expected          string
+	}{
+		{
+			testName:          "PathGeneratedWithEnvironmentName",
+			release:           &ReleaseSpec{Name: "release-name"},
+			outputDir:         "/output-dir",
+			outputDirTemplate: "{{ .OutputDir }}/{{ .Environment.Name }}/{{ .Release.Name }}",
+			wantErr:           false,
+			expected:          "/output-dir/test-env/release-name",
+		},
+		{
+			testName:          "PathGeneratedWithEnvironmentValues",
+			release:           &ReleaseSpec{Name: "release-name"},
+			outputDir:         "/output-dir",
+			outputDirTemplate: "{{ .OutputDir }}/{{ .Environment.Values.cluster.name }}/{{ .Release.Name }}",
+			wantErr:           false,
+			expected:          "/output-dir/my-test-cluster/release-name",
+		},
+		{
+			testName:          "PathGeneratedWithEnvironmentKubeContext",
+			release:           &ReleaseSpec{Name: "release-name"},
+			outputDir:         "/output-dir",
+			outputDirTemplate: "{{ .OutputDir }}/{{ .Environment.KubeContext }}/{{ .Release.Name }}",
+			wantErr:           false,
+			expected:          "/output-dir/test-kubecontext/release-name",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.testName, func(t *testing.T) {
+			st := &HelmState{
+				FilePath: "test.yaml",
+				ReleaseSetSpec: ReleaseSetSpec{
+					Env: environment.Environment{
+						Name:        "test-env",
+						KubeContext: "test-kubecontext",
+						Values: map[string]any{
+							"cluster": map[string]any{
+								"name": "my-test-cluster",
+							},
+						},
+					},
+				},
+			}
+			got, err := st.GenerateOutputDir(tt.outputDir, tt.release, tt.outputDirTemplate)
+
+			if tt.wantErr {
+				require.Errorf(t, err, "GenerateOutputDir() error \"%v\", want error", err)
+			} else {
+				require.NoError(t, err, "GenerateOutputDir() error \"%v\", want no error", err)
+			}
+			require.Equalf(t, tt.expected, got, "GenerateOutputDir() got \"%v\", want \"%v\"", got, tt.expected)
 		})
 	}
 }
@@ -4911,5 +5658,104 @@ func TestChartCache(t *testing.T) {
 	}
 	if cachedPath != path {
 		t.Errorf("Expected path %s, got %s", path, cachedPath)
+	}
+}
+
+// TestHelmState_getKubeContext tests the kube-context resolution logic
+// Issue #2309: This helper is used to pass kube-context to chartify
+func TestHelmState_getKubeContext(t *testing.T) {
+	tests := []struct {
+		name         string
+		defaults     HelmSpec
+		environments map[string]EnvironmentSpec
+		envName      string
+		release      *ReleaseSpec
+		want         string
+	}{
+		{
+			name:     "returns empty when no context configured",
+			defaults: HelmSpec{},
+			release:  &ReleaseSpec{Name: "test"},
+			want:     "",
+		},
+		{
+			name: "returns release kubeContext when set",
+			defaults: HelmSpec{
+				KubeContext: "default-context",
+			},
+			release: &ReleaseSpec{
+				Name:        "test",
+				KubeContext: "release-context",
+			},
+			want: "release-context",
+		},
+		{
+			name: "returns helmDefaults kubeContext when release not set",
+			defaults: HelmSpec{
+				KubeContext: "default-context",
+			},
+			release: &ReleaseSpec{
+				Name: "test",
+			},
+			want: "default-context",
+		},
+		{
+			name: "environment overrides helmDefaults when release not set",
+			defaults: HelmSpec{
+				KubeContext: "default-context",
+			},
+			environments: map[string]EnvironmentSpec{
+				"production": {KubeContext: "env-context"},
+			},
+			envName: "production",
+			release: &ReleaseSpec{
+				Name: "test",
+			},
+			want: "env-context",
+		},
+		{
+			name: "release overrides environment",
+			defaults: HelmSpec{
+				KubeContext: "default-context",
+			},
+			environments: map[string]EnvironmentSpec{
+				"production": {KubeContext: "env-context"},
+			},
+			envName: "production",
+			release: &ReleaseSpec{
+				Name:        "test",
+				KubeContext: "release-context",
+			},
+			want: "release-context",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			envName := tt.envName
+			if envName == "" {
+				envName = "default"
+			}
+			environments := tt.environments
+			if environments == nil {
+				environments = make(map[string]EnvironmentSpec)
+			}
+
+			state := &HelmState{
+				basePath: "./",
+				ReleaseSetSpec: ReleaseSetSpec{
+					HelmDefaults: tt.defaults,
+					Environments: environments,
+					Env: environment.Environment{
+						Name: envName,
+					},
+				},
+			}
+
+			got := state.getKubeContext(tt.release)
+			if got != tt.want {
+				t.Errorf("getKubeContext() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

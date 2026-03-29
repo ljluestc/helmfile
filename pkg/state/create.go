@@ -137,6 +137,12 @@ func (c *StateCreator) Parse(content []byte, baseDir, file string) (*HelmState, 
 	return &state, nil
 }
 
+// ApplyDefaultsAndOverrides applies default binary paths and command-line overrides.
+// This is an exported version of applyDefaultsAndOverrides for use by the app package.
+func (c *StateCreator) ApplyDefaultsAndOverrides(state *HelmState) {
+	c.applyDefaultsAndOverrides(state)
+}
+
 // applyDefaultsAndOverrides applies default binary paths and command-line overrides
 func (c *StateCreator) applyDefaultsAndOverrides(state *HelmState) {
 	if c.overrideHelmBinary != "" && c.overrideHelmBinary != DefaultHelmBinary {
@@ -179,7 +185,8 @@ func (c *StateCreator) LoadEnvValues(target *HelmState, env string, failOnMissin
 
 // Parses YAML into HelmState, while loading environment values files relative to the `baseDir`
 // evaluateBases=true means that this is NOT a base helmfile
-func (c *StateCreator) ParseAndLoad(content []byte, baseDir, file string, envName string, failOnMissingEnv, evaluateBases bool, envValues, overrode *environment.Environment) (*HelmState, error) {
+// applyDefaults=true means that applyDefaultsAndOverrides should be called
+func (c *StateCreator) ParseAndLoad(content []byte, baseDir, file string, envName string, failOnMissingEnv, evaluateBases, applyDefaults bool, envValues, overrode *environment.Environment) (*HelmState, error) {
 	state, err := c.Parse(content, baseDir, file)
 	if err != nil {
 		return nil, err
@@ -198,7 +205,9 @@ func (c *StateCreator) ParseAndLoad(content []byte, baseDir, file string, envNam
 		// Apply default binaries and command-line overrides only for the main helmfile
 		// after loading and merging all bases. This ensures that values from bases are
 		// properly respected and that later bases/documents can override earlier ones.
-		c.applyDefaultsAndOverrides(state)
+		if applyDefaults {
+			c.applyDefaultsAndOverrides(state)
+		}
 	}
 
 	state, err = c.LoadEnvValues(state, envName, failOnMissingEnv, envValues, overrode)
@@ -397,26 +406,33 @@ func (c *StateCreator) loadEnvValues(st *HelmState, name string, failOnMissingEn
 		return nil, &UndefinedEnvError{Env: name}
 	}
 
-	newEnv := &environment.Environment{Name: name, Values: valuesVals, KubeContext: envSpec.KubeContext}
+	newEnv := &environment.Environment{Name: name, Values: valuesVals, KubeContext: envSpec.KubeContext, Defaults: map[string]any{}, CLIOverrides: map[string]any{}}
 
 	if ctxEnv != nil {
-		intCtxEnv := *ctxEnv
-
-		if err := mergo.Merge(&intCtxEnv, newEnv, mergo.WithOverride); err != nil {
-			return nil, fmt.Errorf("error while merging environment values for \"%s\": %v", name, err)
+		// Merge base defaults (from top-level values:) - needed for multi-part helmfiles
+		// ctxEnv.Defaults is the base, newEnv.Defaults overrides (later parts win)
+		newEnv.Defaults = maputil.MergeMaps(ctxEnv.Defaults, newEnv.Defaults)
+		// Merge layer values - ctxEnv is base, newEnv (current part) overrides
+		newEnv.Values = maputil.MergeMaps(ctxEnv.Values, newEnv.Values)
+		// Copy CLI overrides to be merged at GetMergedValues time
+		newEnv.CLIOverrides = maputil.MergeMaps(newEnv.CLIOverrides, ctxEnv.CLIOverrides,
+			maputil.MergeOptions{ArrayStrategy: maputil.ArrayMergeStrategyMerge})
+		if ctxEnv.Name != "" {
+			newEnv.Name = ctxEnv.Name
 		}
-
-		newEnv = &intCtxEnv
+		if ctxEnv.KubeContext != "" {
+			newEnv.KubeContext = ctxEnv.KubeContext
+		}
 	}
 
 	if overrode != nil {
-		intOverrodeEnv := *newEnv
-
-		// Use MergeMaps instead of mergo.Merge to properly handle array merging element-by-element
-		// This fixes issue #2281 where arrays were being replaced entirely instead of merged
-		intOverrodeEnv.Values = maputil.MergeMaps(intOverrodeEnv.Values, overrode.Values)
-
-		newEnv = &intOverrodeEnv
+		// Merge base defaults from overrode
+		newEnv.Defaults = maputil.MergeMaps(newEnv.Defaults, overrode.Defaults)
+		// Merge layer values from overrode (arrays replace)
+		newEnv.Values = maputil.MergeMaps(newEnv.Values, overrode.Values)
+		// Merge CLI overrides (arrays merge element-by-element)
+		newEnv.CLIOverrides = maputil.MergeMaps(newEnv.CLIOverrides, overrode.CLIOverrides,
+			maputil.MergeOptions{ArrayStrategy: maputil.ArrayMergeStrategyMerge})
 	}
 
 	return newEnv, nil

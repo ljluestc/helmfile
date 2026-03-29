@@ -136,7 +136,22 @@ func (st *HelmState) mergeLockedDependencies() (*HelmState, error) {
 		return st, nil
 	}
 
-	depMan := NewChartDependencyManager(filename, st.logger, st.LockFile)
+	lockFile := st.LockFile
+	// When basePath is set (e.g. when loaded with baseDir instead of os.Chdir),
+	// resolve the lock file path relative to basePath so it can be found
+	// without changing the working directory.
+	switch {
+	case lockFile != "":
+		if st.basePath != "" && !filepath.IsAbs(lockFile) {
+			lockFile = filepath.Join(st.basePath, lockFile)
+		}
+	case st.basePath != "":
+		// When no custom lockfile is specified, use the default lockfile name
+		// joined with basePath to ensure it's found when not changing CWD.
+		lockFile = filepath.Join(st.basePath, filename+".lock")
+	}
+
+	depMan := NewChartDependencyManager(filename, st.logger, lockFile)
 
 	if st.fs.ReadFile != nil {
 		depMan.readFile = st.fs.ReadFile
@@ -249,7 +264,17 @@ func getUnresolvedDependenciess(st *HelmState) (string, *UnresolvedDependencies)
 }
 
 func updateDependencies(st *HelmState, shell helmexec.DependencyUpdater, unresolved *UnresolvedDependencies, filename, wd string) (*HelmState, error) {
-	depMan := NewChartDependencyManager(filename, st.logger, st.LockFile)
+	lockFile := st.LockFile
+	switch {
+	case lockFile != "":
+		if st.basePath != "" && !filepath.IsAbs(lockFile) {
+			lockFile = filepath.Join(st.basePath, lockFile)
+		}
+	case st.basePath != "":
+		lockFile = filepath.Join(st.basePath, filename+".lock")
+	}
+
+	depMan := NewChartDependencyManager(filename, st.logger, lockFile)
 
 	_, err := depMan.Update(shell, wd, unresolved)
 	if err != nil {

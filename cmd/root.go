@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	stderrors "errors"
 	"fmt"
 	"os"
 
@@ -23,6 +24,10 @@ var globalUsage = "Declaratively deploy your Kubernetes manifests, Kustomize con
 
 func toCLIError(g *config.GlobalImpl, err error) error {
 	if err != nil {
+		var exitErr helmexec.ExitError
+		if stderrors.As(err, &exitErr) {
+			return errors.NewExitError(exitErr.Error(), exitErr.ExitStatus())
+		}
 		switch e := err.(type) {
 		case *app.NoMatchingHelmfileError:
 			noMatchingExitCode := 3
@@ -35,7 +40,7 @@ func toCLIError(g *config.GlobalImpl, err error) error {
 		case *app.Error:
 			return errors.NewExitError(e.Error(), e.Code())
 		default:
-			panic(fmt.Errorf("BUG: please file an github issue for this unhandled error: %T: %v", e, e))
+			return errors.NewExitError(fmt.Sprintf("unexpected error: %T: %v", e, e), 1)
 		}
 	}
 	return err
@@ -99,6 +104,7 @@ func NewRootCmd(globalConfig *config.GlobalOptions) (*cobra.Command, error) {
 		NewLintCmd(globalImpl),
 		NewWriteValuesCmd(globalImpl),
 		NewTestCmd(globalImpl),
+		NewUnittestCmd(globalImpl),
 		NewTemplateCmd(globalImpl),
 		NewSyncCmd(globalImpl),
 		NewDiffCmd(globalImpl),
@@ -144,6 +150,10 @@ The name of a release can be used as a label: "--selector name=myrelease"`)
 	fs.BoolVar(&globalOptions.EnableLiveOutput, "enable-live-output", globalOptions.EnableLiveOutput, `Show live output from the Helm binary Stdout/Stderr into Helmfile own Stdout/Stderr.
 It only applies for the Helm CLI commands, Stdout/Stderr for Hooks are still displayed only when it's execution finishes.`)
 	fs.BoolVarP(&globalOptions.Interactive, "interactive", "i", false, "Request confirmation before attempting to modify clusters")
+	fs.BoolVar(&globalOptions.SequentialHelmfiles, "sequential-helmfiles", false, `Process helmfile.d files sequentially in alphabetical order instead of in parallel.
+Useful when file order matters for dependencies (e.g., databases before applications).
+When processing multiple files, paths are resolved without changing the process working directory,
+so relative environment variables like KUBECONFIG work correctly.`)
 	// avoid 'pflag: help requested' error (#251)
 	fs.BoolP("help", "h", false, "help for helmfile")
 }

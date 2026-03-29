@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 
@@ -12,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/helmfile/helmfile/pkg/environment"
+	"github.com/helmfile/helmfile/pkg/envvar"
 	"github.com/helmfile/helmfile/pkg/filesystem"
 	"github.com/helmfile/helmfile/pkg/helmexec"
 	"github.com/helmfile/helmfile/pkg/policy"
@@ -62,9 +64,16 @@ func (ld *desiredStateLoader) Load(f string, opts LoadOpts) (*state.HelmState, e
 			return nil, err
 		}
 
-		overrodeEnv = &environment.Environment{
-			Name:   ld.env,
-			Values: vals,
+		if opts.Environment.OverrideValuesAreCLI {
+			overrodeEnv = &environment.Environment{
+				Name:         ld.env,
+				CLIOverrides: vals,
+			}
+		} else {
+			overrodeEnv = &environment.Environment{
+				Name:   ld.env,
+				Values: vals,
+			}
 		}
 	}
 
@@ -183,7 +192,8 @@ func (a *desiredStateLoader) rawLoad(yaml []byte, baseDir, file string, evaluate
 		return nil, err
 	}
 
-	st, err = a.underlying().ParseAndLoad(yaml, baseDir, file, a.env, false, evaluateBases, merged, nil)
+	// applyDefaults is always false here - defaults are applied after all parts are merged
+	st, err = a.underlying().ParseAndLoad(yaml, baseDir, file, a.env, false, evaluateBases, false, merged, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -216,7 +226,9 @@ func (ld *desiredStateLoader) load(env, overrodeEnv *environment.Environment, ba
 
 		var rawContent []byte
 
-		if filepath.Ext(filename) == ".gotmpl" {
+		shouldRender := filepath.Ext(filename) == ".gotmpl" || os.Getenv(envvar.RenderYaml) == "true"
+
+		if shouldRender {
 			var yamlBuf *bytes.Buffer
 			var err error
 
@@ -291,6 +303,14 @@ func (ld *desiredStateLoader) load(env, overrodeEnv *environment.Environment, ba
 				Cause: &state.UndefinedEnvError{Env: env.Name},
 			}
 		}
+	}
+
+	// After all parts are merged, apply defaults and overrides to ensure
+	// that values from earlier parts (like helmBinary) are preserved correctly
+	// in the merged state.
+	// See https://github.com/helmfile/helmfile/issues/2319
+	if evaluateBases {
+		ld.underlying().ApplyDefaultsAndOverrides(finalState)
 	}
 
 	// If environments are not defined in the helmfile at all although the env is specified,
